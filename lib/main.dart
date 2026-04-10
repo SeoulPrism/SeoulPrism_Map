@@ -1,122 +1,119 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_naver_map/flutter_naver_map.dart';
+import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart';
+import 'core/map_interface.dart';
+import 'core/api_keys.dart';
+import 'map_engines/mapbox_engine.dart';
+import 'map_engines/google_map_engine.dart';
+import 'map_engines/naver_map_engine.dart';
 
-void main() {
-  runApp(const MyApp());
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  
+  // ApiKeys 클래스에서 값 가져오기
+  MapboxOptions.setAccessToken(ApiKeys.mapboxAccessToken);
+
+  // Naver Map SDK 초기화
+  await NaverMapSdk.instance.initialize(
+    clientId: ApiKeys.naverClientId,
+  );
+
+  runApp(const SeoulPrismApp());
 }
 
-class MyApp extends StatelessWidget {
-  const MyApp({super.key});
+class SeoulPrismApp extends StatelessWidget {
+  const SeoulPrismApp({super.key});
 
-  // This widget is the root of your application.
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Flutter Demo',
+      title: 'SeoulPrism_Map',
+      debugShowCheckedModeBanner: false,
       theme: ThemeData(
-        // This is the theme of your application.
-        //
-        // TRY THIS: Try running your application with "flutter run". You'll see
-        // the application has a purple toolbar. Then, without quitting the app,
-        // try changing the seedColor in the colorScheme below to Colors.green
-        // and then invoke "hot reload" (save your changes or press the "hot
-        // reload" button in a Flutter-supported IDE, or press "r" if you used
-        // the command line to start the app).
-        //
-        // Notice that the counter didn't reset back to zero; the application
-        // state is not lost during the reload. To reset the state, use hot
-        // restart instead.
-        //
-        // This works for code too, not just values: Most code changes can be
-        // tested with just a hot reload.
-        colorScheme: .fromSeed(seedColor: Colors.deepPurple),
+        useMaterial3: true,
+        brightness: Brightness.dark,
+        colorSchemeSeed: Colors.blue,
       ),
-      home: const MyHomePage(title: 'Flutter Demo Home Page'),
+      home: const DashboardScreen(),
     );
   }
 }
 
-class MyHomePage extends StatefulWidget {
-  const MyHomePage({super.key, required this.title});
-
-  // This widget is the home page of your application. It is stateful, meaning
-  // that it has a State object (defined below) that contains fields that affect
-  // how it looks.
-
-  // This class is the configuration for the state. It holds the values (in this
-  // case the title) provided by the parent (in this case the App widget) and
-  // used by the build method of the State. Fields in a Widget subclass are
-  // always marked "final".
-
-  final String title;
-
+class DashboardScreen extends StatefulWidget {
+  const DashboardScreen({super.key});
   @override
-  State<MyHomePage> createState() => _MyHomePageState();
+  State<DashboardScreen> createState() => _DashboardScreenState();
 }
 
-class _MyHomePageState extends State<MyHomePage> {
-  int _counter = 0;
+class _DashboardScreenState extends State<DashboardScreen> {
+  MapType _currentMapType = MapType.mapbox;
+  IMapController? _mapController;
+  double _pitch = 0.0;
+  double _zoom = 12.0;
+  CameraInfo _cameraInfo = CameraInfo(lat: 37.5665, lng: 126.9780, zoom: 12.0, pitch: 0.0, bearing: 0.0);
 
-  void _incrementCounter() {
-    setState(() {
-      // This call to setState tells the Flutter framework that something has
-      // changed in this State, which causes it to rerun the build method below
-      // so that the display can reflect the updated values. If we changed
-      // _counter without calling setState(), then the build method would not be
-      // called again, and so nothing would appear to happen.
-      _counter++;
-    });
-  }
+  void _onMapCreated(IMapController controller) => _mapController = controller;
 
   @override
   Widget build(BuildContext context) {
-    // This method is rerun every time setState is called, for instance as done
-    // by the _incrementCounter method above.
-    //
-    // The Flutter framework has been optimized to make rerunning build methods
-    // fast, so that you can just rebuild anything that needs updating rather
-    // than having to individually change instances of widgets.
     return Scaffold(
-      appBar: AppBar(
-        // TRY THIS: Try changing the color here to a specific color (to
-        // Colors.amber, perhaps?) and trigger a hot reload to see the AppBar
-        // change color while the other colors stay the same.
-        backgroundColor: Theme.of(context).colorScheme.inversePrimary,
-        // Here we take the value from the MyHomePage object that was created by
-        // the App.build method, and use it to set our appbar title.
-        title: Text(widget.title),
-      ),
-      body: Center(
-        // Center is a layout widget. It takes a single child and positions it
-        // in the middle of the parent.
-        child: Column(
-          // Column is also a layout widget. It takes a list of children and
-          // arranges them vertically. By default, it sizes itself to fit its
-          // children horizontally, and tries to be as tall as its parent.
-          //
-          // Column has various properties to control how it sizes itself and
-          // how it positions its children. Here we use mainAxisAlignment to
-          // center the children vertically; the main axis here is the vertical
-          // axis because Columns are vertical (the cross axis would be
-          // horizontal).
-          //
-          // TRY THIS: Invoke "debug painting" (choose the "Toggle Debug Paint"
-          // action in the IDE, or press "p" in the console), to see the
-          // wireframe for each widget.
-          mainAxisAlignment: .center,
-          children: [
-            const Text('You have pushed the button this many times:'),
-            Text(
-              '$_counter',
-              style: Theme.of(context).textTheme.headlineMedium,
-            ),
-          ],
-        ),
-      ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: _incrementCounter,
-        tooltip: 'Increment',
-        child: const Icon(Icons.add),
+      body: Stack(
+        children: [
+          Positioned.fill(key: ValueKey(_currentMapType), child: _buildActiveMapEngine()),
+          Positioned(top: 60, right: 20, child: _buildDebugPanel()),
+          Positioned(bottom: 40, left: 20, right: 20, child: _buildControlPanel()),
+          Positioned(top: 60, left: 20, child: _buildMapSwitcher()),
+        ],
       ),
     );
   }
+
+  Widget _buildActiveMapEngine() {
+    switch (_currentMapType) {
+      case MapType.mapbox: return MapboxEngine(initialCamera: _cameraInfo, onMapCreated: _onMapCreated);
+      case MapType.google: return GoogleMapEngine(initialCamera: _cameraInfo, onMapCreated: _onMapCreated);
+      case MapType.naver: return NaverMapEngine(initialCamera: _cameraInfo, onMapCreated: _onMapCreated);
+    }
+  }
+
+  Widget _buildMapSwitcher() {
+    return Card(
+      elevation: 10, color: Colors.black.withOpacity(0.85),
+      child: Padding(
+        padding: const EdgeInsets.all(4.0),
+        child: Column(
+          children: MapType.values.map((type) => IconButton(
+            icon: Icon(type == MapType.mapbox ? Icons.layers : type == MapType.google ? Icons.language : Icons.map,
+            color: _currentMapType == type ? Colors.blueAccent : Colors.white24),
+            onPressed: () => setState(() { _currentMapType = type; _mapController = null; }),
+          )).toList(),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildDebugPanel() {
+    return Card(color: Colors.black.withOpacity(0.7), child: Container(padding: const EdgeInsets.all(12.0), width: 180, child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+      Text(_currentMapType.name.toUpperCase(), style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.blueAccent)),
+      const Divider(height: 15, color: Colors.white10),
+      _debugRow('LAT', _cameraInfo.lat.toStringAsFixed(4)),
+      _debugRow('LNG', _cameraInfo.lng.toStringAsFixed(4)),
+    ])));
+  }
+
+  Widget _debugRow(String l, String v) => Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [Text(l, style: const TextStyle(fontSize: 10, color: Colors.grey)), Text(v, style: const TextStyle(fontSize: 10))]);
+
+  Widget _buildControlPanel() {
+    return Card(color: Colors.black.withOpacity(0.8), child: Padding(padding: const EdgeInsets.all(16.0), child: Column(mainAxisSize: MainAxisSize.min, children: [
+      _sliderRow('PITCH', _pitch, 0, 60, (v) { setState(() => _pitch = v); _mapController?.setPitch(v); }),
+      const SizedBox(height: 10),
+      Row(mainAxisAlignment: MainAxisAlignment.spaceEvenly, children: [
+        _quickActionBtn('CITY HALL', 37.5665, 126.9780),
+        _quickActionBtn('GANGNAM', 37.4979, 127.0276),
+      ]),
+    ])));
+  }
+
+  Widget _sliderRow(String l, double v, double min, double max, Function(double) f) => Row(children: [Text(l, style: const TextStyle(fontSize: 9)), Expanded(child: Slider(value: v, min: min, max: max, onChanged: f)), Text('${v.toInt()}')]);
+  Widget _quickActionBtn(String l, double lat, double lng) => OutlinedButton(onPressed: () => setState(() { _cameraInfo = CameraInfo(lat: lat, lng: lng, zoom: _zoom, pitch: _pitch, bearing: 0.0); _mapController?.moveTo(lat, lng); }), child: Text(l, style: const TextStyle(fontSize: 10)));
 }

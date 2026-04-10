@@ -1,0 +1,77 @@
+PODS:
+  - Flutter (1.0.0)
+  - flutter_naver_map (1.4.2):
+    - Flutter
+    - NMapsMap (= 3.23.0)
+  - Google-Maps-iOS-Utils (5.0.0):
+    - GoogleMaps (~> 8.0)
+  - google_maps_flutter_ios (0.0.1):
+    - Flutter
+    - Google-Maps-iOS-Utils (< 7.0, >= 5.0)
+    - GoogleMaps (< 11.0, >= 8.4)
+  - GoogleMaps (8.4.0):
+    - GoogleMaps/Maps (= 8.4.0)
+  - GoogleMaps/Base (8.4.0)
+  - GoogleMaps/Maps (8.4.0):
+    - GoogleMaps/Base
+  - mapbox_maps_flutter (2.21.0):
+    - Flutter
+    - MapboxMaps (= 11.21.0)
+    - Turf (= 4.0.0)
+  - MapboxCommon (24.21.0):
+    - Turf (= 4.0.0)
+  - MapboxCoreMaps (11.21.0):
+    - MapboxCommon (= 24.21.0)
+  - MapboxMaps (11.21.0):
+    - MapboxCommon (= 24.21.0)
+    - MapboxCoreMaps (= 11.21.0)
+    - Turf (= 4.0.0)
+  - NMapsGeometry (1.0.2)
+  - NMapsMap (3.23.0):
+    - NMapsGeometry
+  - Turf (4.0.0)
+
+DEPENDENCIES:
+  - Flutter (from `Flutter`)
+  - flutter_naver_map (from `.symlinks/plugins/flutter_naver_map/ios`)
+  - google_maps_flutter_ios (from `.symlinks/plugins/google_maps_flutter_ios/ios`)
+  - mapbox_maps_flutter (from `.symlinks/plugins/mapbox_maps_flutter/ios`)
+
+SPEC REPOS:
+  trunk:
+    - Google-Maps-iOS-Utils
+    - GoogleMaps
+    - MapboxCommon
+    - MapboxCoreMaps
+    - MapboxMaps
+    - NMapsGeometry
+    - NMapsMap
+    - Turf
+
+EXTERNAL SOURCES:
+  Flutter:
+    :path: Flutter
+  flutter_naver_map:
+    :path: ".symlinks/plugins/flutter_naver_map/ios"
+  google_maps_flutter_ios:
+    :path: ".symlinks/plugins/google_maps_flutter_ios/ios"
+  mapbox_maps_flutter:
+    :path: ".symlinks/plugins/mapbox_maps_flutter/ios"
+
+SPEC CHECKSUMS:
+  Flutter: cabc95a1d2626b1b06e7179b784ebcf0c0cde467
+  flutter_naver_map: a1f6df83f663d9770e01624ba97a2d34c4fe349b
+  Google-Maps-iOS-Utils: 66d6de12be1ce6d3742a54661e7a79cb317a9321
+  google_maps_flutter_ios: 5f2ee3f5cc4fc2398574367f893e3f97bbbcea39
+  GoogleMaps: 8939898920281c649150e0af74aa291c60f2e77d
+  mapbox_maps_flutter: c5240889dae28a05fee3774d4ebdcc64a47919f3
+  MapboxCommon: c3ebc293d2e36be660f3ceb446d99e30d17c8399
+  MapboxCoreMaps: 18739de744a107c2a9c4cd18b21a21d75066d6b0
+  MapboxMaps: 6adfdfc495708b8bb06a463bc61421610d1bd2cd
+  NMapsGeometry: 4e02554fa9880ef02ed96b075dc84355d6352479
+  NMapsMap: 1964e6f9073301ad3cbe3a12235ba36f6f6cd905
+  Turf: c9eb11a65d96af58cac523460fd40fec5061b081
+
+PODFILE CHECKSUM: 3792415449308f3df261ad2990f1c89a4999bbeb
+
+COCOAPODS: 1.16.2
