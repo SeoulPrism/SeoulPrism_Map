@@ -58,6 +58,29 @@ class ApiKeys {
 - [x] 멀티 지도 엔진 래퍼 구조 구현 (#1)
 - [x] 디버그용 실시간 파라미터 대시보드 구축 (#1)
 - [x] Mapbox 3D 건물 및 지형 엔진 연동 (#1)
-- [ ] 서울시 실시간 따릉이 API 실데이터 연동
+- [x] 서울시 지하철 실시간 열차 위치정보 API 연동 (OA-12601)
+- [x] 서울시 지하철 실시간 도착정보 API 연동 (OA-12764)
+- [x] 서울시 지하철 실시간 도착정보 일괄 API 연동 (OA-15799)
+- [x] 서울시 지하철역 연계 지하도 공간정보 API 연동 (OA-21213)
+- [x] 서울시 지하철 출입구 리프트 위치정보 API 연동 (OA-21211)
+- [x] MiniTokyo3D 스타일 열차 위치 보간 엔진 구현
+- [x] 노선 경로 시각화 (1~9호선 + 주요 노선)
+- [x] 실시간 열차 위치 지도 오버레이
+- [x] 역 도착정보 패널 UI
 - [ ] 특정 건물 하이라이트 및 클릭 이벤트 처리
 - [ ] AI Fly-To (임의 좌표 부드러운 카메라 애니메이션) 구현
+
+## 데이터 출처
+### 서울시 지하철 실시간 열차 위치정보
+https://data.seoul.go.kr/dataList/OA-12601/A/1/datasetView.do
+### 서울시 지하철 실시간 도착정보
+https://data.seoul.go.kr/dataList/OA-12764/F/1/datasetView.do
+### 서울시 지하철 실시간 도착정보(일괄)
+https://data.seoul.go.kr/dataList/OA-15799/A/1/datasetView.do
+### 서울시 지하철역 연계 지하도 공간정보
+https://data.seoul.go.kr/dataList/OA-21213/S/1/datasetView.do
+### 서울시 지하철 출입구 리프트 위치정보
+https://data.seoul.go.kr/dataList/OA-21211/S/1/datasetView.do
+
+## 참고 
+https://minitokyo3d.com/#15.2/35.678432/139.766166/0/60
