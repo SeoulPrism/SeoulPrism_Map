@@ -2,8 +2,8 @@ import 'package:flutter/material.dart';
 import '../models/subway_models.dart';
 import 'subway_overlay.dart';
 
-/// 지하철 실시간 정보 제어 패널
-class SubwayControlPanel extends StatelessWidget {
+/// 지하철 실시간 정보 제어 패널 (접기/펼치기 지원)
+class SubwayControlPanel extends StatefulWidget {
   final SubwayOverlayController controller;
   final VoidCallback onRefresh;
 
@@ -14,9 +14,16 @@ class SubwayControlPanel extends StatelessWidget {
   });
 
   @override
+  State<SubwayControlPanel> createState() => _SubwayControlPanelState();
+}
+
+class _SubwayControlPanelState extends State<SubwayControlPanel> {
+  bool _isCollapsed = false;
+
+  @override
   Widget build(BuildContext context) {
     return Card(
-      color: Colors.black.withOpacity(0.9),
+      color: Colors.black.withValues(alpha: 0.9),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       child: Container(
         width: 220,
@@ -26,12 +33,14 @@ class SubwayControlPanel extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           children: [
             _buildHeader(),
-            const Divider(height: 16, color: Colors.white10),
-            _buildStatusInfo(),
-            const Divider(height: 16, color: Colors.white10),
-            _buildToggles(),
-            const Divider(height: 16, color: Colors.white10),
-            _buildLineFilter(),
+            if (!_isCollapsed) ...[
+              const Divider(height: 16, color: Colors.white10),
+              _buildStatusInfo(),
+              const Divider(height: 16, color: Colors.white10),
+              _buildToggles(),
+              const Divider(height: 16, color: Colors.white10),
+              _buildLineFilter(),
+            ],
           ],
         ),
       ),
@@ -43,7 +52,7 @@ class SubwayControlPanel extends StatelessWidget {
       children: [
         Icon(
           Icons.train,
-          color: controller.isActive ? Colors.greenAccent : Colors.grey,
+          color: widget.controller.isActive ? Colors.greenAccent : Colors.grey,
           size: 18,
         ),
         const SizedBox(width: 8),
@@ -57,15 +66,24 @@ class SubwayControlPanel extends StatelessWidget {
           ),
         ),
         const Spacer(),
+        GestureDetector(
+          onTap: () => setState(() => _isCollapsed = !_isCollapsed),
+          child: Icon(
+            _isCollapsed ? Icons.expand_more : Icons.expand_less,
+            color: Colors.white54,
+            size: 20,
+          ),
+        ),
+        const SizedBox(width: 4),
         _PowerButton(
-          isActive: controller.isActive,
+          isActive: widget.controller.isActive,
           onPressed: () {
-            if (controller.isActive) {
-              controller.stop();
+            if (widget.controller.isActive) {
+              widget.controller.stop();
             } else {
-              controller.start();
+              widget.controller.start();
             }
-            onRefresh();
+            widget.onRefresh();
           },
         ),
       ],
@@ -73,7 +91,7 @@ class SubwayControlPanel extends StatelessWidget {
   }
 
   Widget _buildStatusInfo() {
-    if (!controller.isActive) {
+    if (!widget.controller.isActive) {
       return const Text(
         'OFF - 탭하여 시작',
         style: TextStyle(fontSize: 10, color: Colors.grey),
@@ -83,15 +101,15 @@ class SubwayControlPanel extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _infoRow('열차 수', '${controller.currentTrains.length}대'),
-        _infoRow('API 수신', '${controller.totalTrainCount}건'),
-        if (controller.lastUpdate != null)
-          _infoRow('갱신', _formatTime(controller.lastUpdate!)),
-        if (controller.lastError != null)
+        _infoRow('열차 수', '${widget.controller.currentTrains.length}대'),
+        _infoRow('API 수신', '${widget.controller.totalTrainCount}건'),
+        if (widget.controller.lastUpdate != null)
+          _infoRow('갱신', _formatTime(widget.controller.lastUpdate!)),
+        if (widget.controller.lastError != null)
           Padding(
             padding: const EdgeInsets.only(top: 4),
             child: Text(
-              controller.lastError!,
+              widget.controller.lastError!,
               style: const TextStyle(fontSize: 8, color: Colors.redAccent),
               maxLines: 2,
               overflow: TextOverflow.ellipsis,
@@ -104,17 +122,17 @@ class SubwayControlPanel extends StatelessWidget {
   Widget _buildToggles() {
     return Column(
       children: [
-        _toggleRow('노선 경로', controller.showRoutes, (v) {
-          controller.toggleRoutes(v);
-          onRefresh();
+        _toggleRow('노선 경로', widget.controller.showRoutes, (v) {
+          widget.controller.toggleRoutes(v);
+          widget.onRefresh();
         }),
-        _toggleRow('열차 위치', controller.showTrains, (v) {
-          controller.toggleTrains(v);
-          onRefresh();
+        _toggleRow('열차 위치', widget.controller.showTrains, (v) {
+          widget.controller.toggleTrains(v);
+          widget.onRefresh();
         }),
-        _toggleRow('역 표시', controller.showStations, (v) {
-          controller.toggleStations(v);
-          onRefresh();
+        _toggleRow('역 표시', widget.controller.showStations, (v) {
+          widget.controller.toggleStations(v);
+          widget.onRefresh();
         }),
       ],
     );
@@ -130,8 +148,8 @@ class SubwayControlPanel extends StatelessWidget {
             const Spacer(),
             GestureDetector(
               onTap: () {
-                controller.setLineFilter(null); // 전체 선택
-                onRefresh();
+                widget.controller.setLineFilter(null);
+                widget.onRefresh();
               },
               child: const Text('전체', style: TextStyle(fontSize: 9, color: Colors.blueAccent)),
             ),
@@ -145,25 +163,25 @@ class SubwayControlPanel extends StatelessWidget {
             final lineId = entry.key;
             final color = entry.value;
             final name = SubwayColors.lineNames[lineId] ?? lineId;
-            final isSelected = controller.selectedLines == null ||
-                controller.selectedLines!.contains(lineId);
+            final isSelected = widget.controller.selectedLines == null ||
+                widget.controller.selectedLines!.contains(lineId);
 
             return GestureDetector(
               onTap: () {
-                final current = controller.selectedLines ??
+                final current = widget.controller.selectedLines ??
                     Set<String>.from(SubwayColors.lineColors.keys);
                 if (current.contains(lineId)) {
                   current.remove(lineId);
                 } else {
                   current.add(lineId);
                 }
-                controller.setLineFilter(current.isEmpty ? null : current);
-                onRefresh();
+                widget.controller.setLineFilter(current.isEmpty ? null : current);
+                widget.onRefresh();
               },
               child: Container(
                 padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                 decoration: BoxDecoration(
-                  color: isSelected ? color.withOpacity(0.3) : Colors.transparent,
+                  color: isSelected ? color.withValues(alpha: 0.3) : Colors.transparent,
                   border: Border.all(
                     color: isSelected ? color : Colors.white12,
                     width: 1,

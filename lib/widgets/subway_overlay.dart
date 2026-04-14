@@ -14,6 +14,7 @@ class SubwayOverlayController {
 
   IMapController? _mapController;
   Timer? _refreshTimer;
+  Timer? _animationTimer;
   bool _isActive = false;
   bool _showRoutes = true;
   bool _showTrains = true;
@@ -21,10 +22,22 @@ class SubwayOverlayController {
 
   // 현재 상태
   List<InterpolatedTrainPosition> _currentTrains = [];
-  Map<String, List<ArrivalInfo>> _arrivalCache = {};
+  final Map<String, List<ArrivalInfo>> _arrivalCache = {};
   String? _lastError;
   DateTime? _lastUpdate;
   int _totalTrainCount = 0;
+
+  // 애니메이션 상태
+  // trainNo → 이전 위치 (lerp 시작점)
+  Map<String, _AnimPos> _prevPositions = {};
+  // trainNo → 목표 위치 (lerp 도착점)
+  Map<String, _AnimPos> _targetPositions = {};
+  // 0.0 ~ 1.0, API 갱신마다 0으로 리셋
+  double _animProgress = 1.0;
+  static const int _animIntervalMs = 200;
+  static const int _fetchIntervalSec = 15;
+  // 한 사이클에서 진행할 총 스텝 수
+  static final int _totalSteps = (_fetchIntervalSec * 1000) ~/ _animIntervalMs;
 
   // 선택된 노선 필터 (null이면 전부 표시)
   Set<String>? _selectedLines;
@@ -48,7 +61,7 @@ class SubwayOverlayController {
     _mapController = controller;
   }
 
-  /// 시각화 시작 (15초 간격 갱신)
+  /// 시각화 시작
   Future<void> start() async {
     if (_isActive) return;
     _isActive = true;
@@ -63,10 +76,16 @@ class SubwayOverlayController {
     // 첫 데이터 로드
     await _fetchAndRender();
 
-    // 주기적 갱신 (15초)
+    // 주기적 API 갱신
     _refreshTimer = Timer.periodic(
-      const Duration(seconds: 15),
+      Duration(seconds: _fetchIntervalSec),
       (_) => _fetchAndRender(),
+    );
+
+    // 애니메이션 타이머 (200ms 간격으로 열차 위치 보간)
+    _animationTimer = Timer.periodic(
+      const Duration(milliseconds: _animIntervalMs),
+      (_) => _animationTick(),
     );
   }
 
@@ -75,6 +94,10 @@ class SubwayOverlayController {
     _isActive = false;
     _refreshTimer?.cancel();
     _refreshTimer = null;
+    _animationTimer?.cancel();
+    _animationTimer = null;
+    _prevPositions.clear();
+    _targetPositions.clear();
     _clearAllOverlays();
     onStateChanged?.call();
   }
@@ -83,7 +106,7 @@ class SubwayOverlayController {
   void setLineFilter(Set<String>? lines) {
     _selectedLines = lines;
     if (_isActive) {
-      _renderTrains();
+      _renderAnimatedTrains();
       if (_showRoutes) _drawSubwayRoutes();
     }
     onStateChanged?.call();
@@ -107,7 +130,7 @@ class SubwayOverlayController {
     _showTrains = show;
     if (_isActive) {
       if (show) {
-        _renderTrains();
+        _renderAnimatedTrains();
       } else {
         _mapController?.clearCircleMarkers();
       }
@@ -122,7 +145,6 @@ class SubwayOverlayController {
       if (show) {
         _drawStationMarkers();
       }
-      // 역 마커는 addMarker로 추가되므로 별도 제거 필요
     }
     onStateChanged?.call();
   }
@@ -138,7 +160,7 @@ class SubwayOverlayController {
     }
   }
 
-  /// 데이터 fetch + 렌더링
+  /// 데이터 fetch + 애니메이션 타겟 설정
   Future<void> _fetchAndRender() async {
     try {
       final allPositions = await _apiService.fetchAllTrainPositions();
@@ -153,8 +175,20 @@ class SubwayOverlayController {
       _lastUpdate = DateTime.now();
       _lastError = null;
 
+      // 이전 target → prev로 이동, 새 target 설정
+      _prevPositions = Map.from(_targetPositions);
+      _targetPositions = {};
+      for (final train in _currentTrains) {
+        _targetPositions[train.trainNo] = _AnimPos(train.lat, train.lng);
+        // 새로 등장한 열차는 target 위치에서 시작
+        _prevPositions.putIfAbsent(train.trainNo, () => _AnimPos(train.lat, train.lng));
+      }
+
+      // 애니메이션 진행도 리셋
+      _animProgress = 0.0;
+
       if (_showTrains) {
-        _renderTrains();
+        _renderAnimatedTrains();
       }
     } catch (e) {
       _lastError = e.toString();
@@ -162,10 +196,25 @@ class SubwayOverlayController {
     onStateChanged?.call();
   }
 
-  /// 열차 위치를 지도에 렌더링
-  void _renderTrains() {
+  /// 애니메이션 틱: 열차 위치를 한 스텝 전진
+  void _animationTick() {
+    if (!_isActive || !_showTrains) return;
+    if (_targetPositions.isEmpty) return;
+
+    // 진행도 증가
+    _animProgress += 1.0 / _totalSteps;
+    if (_animProgress > 1.0) _animProgress = 1.0;
+
+    _renderAnimatedTrains();
+  }
+
+  /// 현재 애니메이션 진행도에 따라 열차 렌더링
+  void _renderAnimatedTrains() {
     if (_mapController == null) return;
     _mapController!.clearCircleMarkers();
+
+    // easeInOut 곡선 적용
+    final t = _easeInOut(_animProgress.clamp(0.0, 1.0));
 
     for (final train in _currentTrains) {
       // 노선 필터 적용
@@ -173,13 +222,21 @@ class SubwayOverlayController {
         continue;
       }
 
+      final prev = _prevPositions[train.trainNo];
+      final target = _targetPositions[train.trainNo];
+      if (target == null) continue;
+
+      // prev가 있으면 보간, 없으면 target 위치
+      final lat = prev != null ? _lerp(prev.lat, target.lat, t) : target.lat;
+      final lng = prev != null ? _lerp(prev.lng, target.lng, t) : target.lng;
+
       final color = SubwayColors.getColor(train.subwayId);
-      final radius = train.expressType == 1 ? 8.0 : 6.0; // 급행은 더 크게
+      final radius = train.expressType == 1 ? 8.0 : 6.0;
 
       _mapController!.addCircleMarker(
         'train_${train.trainNo}',
-        train.lat,
-        train.lng,
+        lat,
+        lng,
         color: color,
         radius: radius,
         strokeColor: train.isLastTrain ? Colors.red : Colors.white,
@@ -187,6 +244,11 @@ class SubwayOverlayController {
       );
     }
   }
+
+  double _lerp(double a, double b, double t) => a + (b - a) * t;
+
+  /// ease-in-out 곡선 (부드러운 출발/도착)
+  double _easeInOut(double t) => t * t * (3.0 - 2.0 * t);
 
   /// 지하철 노선 경로를 지도에 그리기
   Future<void> _drawSubwayRoutes() async {
@@ -196,7 +258,6 @@ class SubwayOverlayController {
     for (final entry in SeoulSubwayData.lineIdToApiName.entries) {
       final lineId = entry.key;
 
-      // 노선 필터 적용
       if (_selectedLines != null && !_selectedLines!.contains(lineId)) {
         continue;
       }
@@ -252,4 +313,11 @@ class SubwayOverlayController {
   void dispose() {
     stop();
   }
+}
+
+/// 애니메이션용 위치 데이터
+class _AnimPos {
+  final double lat;
+  final double lng;
+  const _AnimPos(this.lat, this.lng);
 }

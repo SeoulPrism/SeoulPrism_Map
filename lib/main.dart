@@ -52,7 +52,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   IMapController? _mapController;
 
   double _pitch = 45.0;
-  double _zoom = 13.0; // 서울 전체가 보이도록 약간 축소
+  double _zoom = 13.0;
   bool _isTerrainEnabled = false;
   String _lightPreset = 'day';
 
@@ -72,7 +72,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   InterpolatedTrainPosition? _selectedTrain;
 
   // 지하철 패널 드래그 위치
-  Offset _subwayPanelOffset = const Offset(20, 200);
+  Offset _subwayPanelOffset = const Offset(20, 60);
 
   @override
   void initState() {
@@ -91,6 +91,17 @@ class _DashboardScreenState extends State<DashboardScreen> {
   void _onMapCreated(IMapController controller) {
     _mapController = controller;
     _subwayController.attachMap(controller);
+  }
+
+  void _switchMapType(MapType type) {
+    if (type == _currentMapType) return;
+    setState(() {
+      _currentMapType = type;
+      _mapController = null;
+    });
+    if (_subwayController.isActive) {
+      _subwayController.stop();
+    }
   }
 
   // 랜덤 마커 스트레스 테스트
@@ -126,22 +137,23 @@ class _DashboardScreenState extends State<DashboardScreen> {
     return Scaffold(
       body: Stack(
         children: [
+          // 지도 엔진
           Positioned.fill(key: ValueKey(_currentMapType), child: _buildActiveMapEngine()),
-
-          // 맵 스위처 (상단 좌측)
-          Positioned(top: 60, left: 20, child: _buildMapSwitcher()),
 
           // 디버그 패널 (상단 우측)
           Positioned(top: 60, right: 20, child: _buildDebugPanel()),
 
-          // 지하철 컨트롤 패널 (드래그 가능)
+          // 지하철 컨트롤 패널 (드래그 가능, 상단 좌측)
           Positioned(
             left: _subwayPanelOffset.dx,
             top: _subwayPanelOffset.dy,
             child: GestureDetector(
               onPanUpdate: (details) {
                 setState(() {
-                  _subwayPanelOffset += details.delta;
+                  final size = MediaQuery.of(context).size;
+                  final dx = (_subwayPanelOffset.dx + details.delta.dx).clamp(0.0, size.width - 60);
+                  final dy = (_subwayPanelOffset.dy + details.delta.dy).clamp(0.0, size.height - 60);
+                  _subwayPanelOffset = Offset(dx, dy);
                 });
               },
               child: SubwayControlPanel(
@@ -151,8 +163,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
             ),
           ),
 
-          // 컨트롤 패널 (하단)
-          Positioned(bottom: 30, left: 20, right: 20, child: _buildControlPanel()),
+          // 슬라이딩 컨트롤 패널 (하단)
+          _buildSlidingControlPanel(),
 
           // 역 도착정보 패널 (중앙)
           if (_showArrivalPanel && _selectedStation != null)
@@ -172,7 +184,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
           // 열차 정보 툴팁
           if (_selectedTrain != null)
             Positioned(
-              bottom: 220,
+              bottom: 80,
               left: 0,
               right: 0,
               child: Center(
@@ -184,6 +196,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
             ),
         ],
       ),
+      bottomNavigationBar: _buildBottomTabBar(),
     );
   }
 
@@ -198,39 +211,124 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
   }
 
-  Widget _buildMapSwitcher() {
-    return Card(
-      elevation: 10,
-      color: Colors.black.withOpacity(0.85),
-      child: Padding(
-        padding: const EdgeInsets.all(4.0),
-        child: Column(
-          children: MapType.values.map((type) => IconButton(
-            icon: Icon(
-              type == MapType.mapbox ? Icons.layers
-                  : type == MapType.google ? Icons.language
-                  : Icons.map,
-              color: _currentMapType == type ? Colors.blueAccent : Colors.white24,
-            ),
-            onPressed: () {
-              setState(() {
-                _currentMapType = type;
-                _mapController = null;
-              });
-              // 맵 전환 시 지하철 오버레이 재연결
-              if (_subwayController.isActive) {
-                _subwayController.stop();
-              }
-            },
-          )).toList(),
-        ),
-      ),
+  // ── 하단 탭바 (맵 엔진 전환) ──
+  Widget _buildBottomTabBar() {
+    return BottomNavigationBar(
+      currentIndex: _currentMapType.index,
+      onTap: (index) => _switchMapType(MapType.values[index]),
+      backgroundColor: Colors.black,
+      selectedItemColor: Colors.blueAccent,
+      unselectedItemColor: Colors.white24,
+      type: BottomNavigationBarType.fixed,
+      items: const [
+        BottomNavigationBarItem(icon: Icon(Icons.layers), label: 'Mapbox'),
+        BottomNavigationBarItem(icon: Icon(Icons.language), label: 'Google'),
+        BottomNavigationBarItem(icon: Icon(Icons.map), label: 'Naver'),
+      ],
     );
   }
 
+  // ── 슬라이딩 컨트롤 패널 ──
+  Widget _buildSlidingControlPanel() {
+    return DraggableScrollableSheet(
+      initialChildSize: 0.06,
+      minChildSize: 0.06,
+      maxChildSize: 0.35,
+      snap: true,
+      snapSizes: const [0.06, 0.35],
+      builder: (context, scrollController) {
+        return Container(
+          decoration: BoxDecoration(
+            color: Colors.black.withValues(alpha: 0.9),
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
+          ),
+          child: ListView(
+            controller: scrollController,
+            padding: EdgeInsets.zero,
+            children: [
+              // 드래그 핸들
+              Center(
+                child: Container(
+                  width: 40,
+                  height: 4,
+                  margin: const EdgeInsets.symmetric(vertical: 10),
+                  decoration: BoxDecoration(
+                    color: Colors.white24,
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+              ),
+              // 컨트롤 내용
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 20),
+                child: _buildControlPanelContent(),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildControlPanelContent() {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Row(
+          children: [
+            _actionChip('STRESS TEST', Icons.bolt, _stressTestMarkers),
+            const SizedBox(width: 8),
+            _actionChip('CLEAR', Icons.delete_outline, () => _mapController?.clearMarkers()),
+            const Spacer(),
+            DropdownButton<String>(
+              value: _lightPreset,
+              items: ['day', 'night', 'dawn', 'dusk']
+                  .map((e) => DropdownMenuItem(
+                      value: e,
+                      child: Text(e.toUpperCase(), style: const TextStyle(fontSize: 10))))
+                  .toList(),
+              onChanged: (v) {
+                if (v != null) {
+                  setState(() => _lightPreset = v);
+                  _mapController?.setLightPreset(v);
+                }
+              },
+            ),
+          ],
+        ),
+        const Divider(height: 20, color: Colors.white10),
+        _sliderRow('PITCH', _pitch, 0, 75, (v) {
+          setState(() => _pitch = v);
+          _mapController?.setPitch(v);
+        }),
+        _sliderRow('ZOOM', _zoom, 8, 20, (v) {
+          setState(() => _zoom = v);
+          _mapController?.setZoom(v);
+        }),
+        const SizedBox(height: 10),
+        SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: Row(
+            children: [
+              _quickActionBtn('CITY HALL', 37.5665, 126.9780),
+              _quickActionBtn('GANGNAM', 37.4979, 127.0276),
+              _quickActionBtn('HONGDAE', 37.5567, 126.9236),
+              const SizedBox(width: 8),
+              _stationBtn('서울역'),
+              _stationBtn('강남'),
+              _stationBtn('홍대입구'),
+              _stationBtn('잠실'),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  // ── 디버그 패널 ──
   Widget _buildDebugPanel() {
     return Card(
-      color: Colors.black.withOpacity(0.7),
+      color: Colors.black.withValues(alpha: 0.7),
       child: Container(
         padding: const EdgeInsets.all(12.0),
         width: 180,
@@ -246,7 +344,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
             _debugRow('ZOOM', _zoom.toStringAsFixed(1)),
             const Divider(height: 15, color: Colors.white10),
 
-            // 실시간 열차 수
             if (_subwayController.isActive) ...[
               _debugRow('TRAINS', '${_subwayController.currentTrains.length}'),
               _debugRow('API', '${_subwayController.totalTrainCount}'),
@@ -288,69 +385,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
       ],
     ),
   );
-
-  Widget _buildControlPanel() {
-    return Card(
-      color: Colors.black.withOpacity(0.85),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-      child: Padding(
-        padding: const EdgeInsets.all(16.0),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Row(
-              children: [
-                _actionChip('STRESS TEST', Icons.bolt, _stressTestMarkers),
-                const SizedBox(width: 8),
-                _actionChip('CLEAR', Icons.delete_outline, () => _mapController?.clearMarkers()),
-                const Spacer(),
-                DropdownButton<String>(
-                  value: _lightPreset,
-                  items: ['day', 'night', 'dawn', 'dusk']
-                      .map((e) => DropdownMenuItem(
-                          value: e,
-                          child: Text(e.toUpperCase(), style: const TextStyle(fontSize: 10))))
-                      .toList(),
-                  onChanged: (v) {
-                    if (v != null) {
-                      setState(() => _lightPreset = v);
-                      _mapController?.setLightPreset(v);
-                    }
-                  },
-                ),
-              ],
-            ),
-            const Divider(height: 20, color: Colors.white10),
-            _sliderRow('PITCH', _pitch, 0, 75, (v) {
-              setState(() => _pitch = v);
-              _mapController?.setPitch(v);
-            }),
-            _sliderRow('ZOOM', _zoom, 8, 20, (v) {
-              setState(() => _zoom = v);
-              _mapController?.setZoom(v);
-            }),
-            const SizedBox(height: 10),
-            SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              child: Row(
-                children: [
-                  _quickActionBtn('CITY HALL', 37.5665, 126.9780),
-                  _quickActionBtn('GANGNAM', 37.4979, 127.0276),
-                  _quickActionBtn('HONGDAE', 37.5567, 126.9236),
-                  const SizedBox(width: 8),
-                  // 역 도착정보 조회 버튼들
-                  _stationBtn('서울역'),
-                  _stationBtn('강남'),
-                  _stationBtn('홍대입구'),
-                  _stationBtn('잠실'),
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
 
   Widget _actionChip(String l, IconData i, VoidCallback onTap) => ActionChip(
     avatar: Icon(i, size: 14),
