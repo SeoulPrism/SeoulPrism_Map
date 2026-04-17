@@ -1,5 +1,7 @@
 import 'dart:convert';
 import 'dart:async';
+import 'dart:developer' as developer;
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import '../core/api_keys.dart';
 import '../models/subway_models.dart';
@@ -14,15 +16,79 @@ import '../models/subway_models.dart';
 class SeoulSubwayService {
   static const String _baseUrl = 'http://swopenAPI.seoul.go.kr/api/subway';
 
+  /// 전체 노선 목록
+  static const List<String> allLineNames = [
+    '1호선', '2호선', '3호선', '4호선', '5호선',
+    '6호선', '7호선', '8호선', '9호선',
+    '경의중앙선', '공항철도', '경춘선', '수인분당선', '신분당선', '우이신설선',
+  ];
+
   String get _apiKey => ApiKeys.seoulApiKey;
+
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  // API 호출 예산 관리 (일일 1,000건 제한 대응)
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  static const int dailyLimit = 1000;
+
+  int _callCount = 0;
+  DateTime _countResetDate = DateTime.now();
+
+  /// 오늘 사용한 API 호출 수
+  int get callCount {
+    _resetIfNewDay();
+    return _callCount;
+  }
+
+  /// 오늘 남은 API 호출 수
+  int get remainingCalls => (dailyLimit - callCount).clamp(0, dailyLimit);
+
+  /// 현재 호출 상황에 맞는 권장 갱신 주기(초)
+  int get recommendedIntervalSec {
+    final remaining = remainingCalls;
+    if (remaining <= 50) return 0; // 중단 권고
+    if (remaining <= 100) return 600; // 10분
+    if (remaining <= 300) return 420; // 7분
+    return 300; // 5분 (기본)
+  }
+
+  /// 심야 시간(01:00~05:00)이면 true — 열차 미운행
+  bool get isNonOperatingHours {
+    final hour = DateTime.now().hour;
+    return hour >= 1 && hour < 5;
+  }
+
+  void _resetIfNewDay() {
+    final now = DateTime.now();
+    if (now.day != _countResetDate.day ||
+        now.month != _countResetDate.month ||
+        now.year != _countResetDate.year) {
+      _callCount = 0;
+      _countResetDate = now;
+      debugPrint('[SeoulSubwayAPI] 🔄 일일 호출 카운터 리셋');
+    }
+  }
+
+  void _incrementCallCount() {
+    _resetIfNewDay();
+    _callCount++;
+  }
+
+  // 마지막 API 에러 메시지 (디버깅용)
+  String? lastApiError;
 
   // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   // 1. 실시간 열차 위치정보 (realtimePosition)
   // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   /// 특정 노선의 실시간 열차 위치 조회
   Future<List<TrainPosition>> fetchTrainPositions(String lineName) async {
+    if (remainingCalls <= 0) {
+      debugPrint('[SeoulSubwayAPI] 🚫 일일 호출 한도 소진 ($dailyLimit/$dailyLimit)');
+      throw SeoulApiException('일일 API 호출 한도($dailyLimit건) 소진', code: 'LIMIT');
+    }
+
     final url = '$_baseUrl/$_apiKey/json/realtimePosition/0/100/$lineName';
     try {
+      _incrementCallCount();
       final response = await http.get(Uri.parse(url)).timeout(
         const Duration(seconds: 10),
       );
@@ -30,49 +96,82 @@ class SeoulSubwayService {
         final data = jsonDecode(response.body);
         if (data['realtimePositionList'] != null) {
           final list = data['realtimePositionList'] as List;
+          debugPrint('[SeoulSubwayAPI] ✅ $lineName: ${list.length}개 열차 (남은 호출: $remainingCalls)');
           return list.map((e) => TrainPosition.fromJson(e)).toList();
         }
         // API 에러 응답 처리
         if (data['status'] != null && data['status'] != 200) {
-          throw SeoulApiException(
-            data['message'] ?? 'API error',
-            code: data['code'] ?? '',
-          );
+          final msg = data['message'] ?? 'API error';
+          final code = data['code'] ?? '';
+          debugPrint('[SeoulSubwayAPI] ❌ $lineName 에러 응답: [$code] $msg');
+          developer.log('API error: [$code] $msg', name: 'SeoulSubwayAPI');
+          throw SeoulApiException(msg, code: code);
         }
+        debugPrint('[SeoulSubwayAPI] ⚠️ $lineName: 데이터 없음 (status=${response.statusCode})');
+      } else {
+        debugPrint('[SeoulSubwayAPI] ❌ $lineName: HTTP ${response.statusCode}');
       }
       return [];
     } on TimeoutException {
+      debugPrint('[SeoulSubwayAPI] ⏱️ $lineName: 요청 시간 초과');
       throw SeoulApiException('요청 시간 초과', code: 'TIMEOUT');
     } catch (e) {
       if (e is SeoulApiException) rethrow;
+      debugPrint('[SeoulSubwayAPI] ❌ $lineName: 네트워크 오류 - $e');
       throw SeoulApiException('네트워크 오류: $e', code: 'NETWORK');
     }
   }
 
-  /// 모든 노선의 실시간 열차 위치를 한번에 조회
-  Future<Map<String, List<TrainPosition>>> fetchAllTrainPositions() async {
-    final lineNames = [
-      '1호선', '2호선', '3호선', '4호선', '5호선',
-      '6호선', '7호선', '8호선', '9호선',
-      '경의중앙선', '공항철도', '경춘선', '수인분당선', '신분당선', '우이신설선',
-    ];
+  /// 열차 위치 조회 — 지정된 노선만, 또는 전체
+  /// [lineNames]를 지정하면 해당 노선만 호출 (호출 수 절약)
+  Future<Map<String, List<TrainPosition>>> fetchAllTrainPositions({
+    List<String>? lineNames,
+  }) async {
+    final targets = lineNames ?? allLineNames;
+
+    // 심야 시간 체크
+    if (isNonOperatingHours) {
+      debugPrint('[SeoulSubwayAPI] 🌙 심야 시간(01~05시) — 열차 미운행, API 호출 건너뜀');
+      lastApiError = '심야 시간(01~05시) 열차 미운행';
+      return {};
+    }
+
+    // 남은 호출 수가 요청할 노선 수보다 적으면 중단
+    if (remainingCalls < targets.length) {
+      debugPrint('[SeoulSubwayAPI] 🚫 남은 호출($remainingCalls) < 요청 노선(${targets.length}), 중단');
+      lastApiError = '일일 한도 부족 (남은: $remainingCalls건)';
+      return {};
+    }
 
     final results = <String, List<TrainPosition>>{};
-    final futures = lineNames.map((name) async {
-      try {
-        final positions = await fetchTrainPositions(name);
-        return MapEntry(name, positions);
-      } catch (_) {
-        return MapEntry(name, <TrainPosition>[]);
-      }
-    });
+    lastApiError = null;
 
-    final entries = await Future.wait(futures);
-    for (final entry in entries) {
-      if (entry.value.isNotEmpty) {
-        results[entry.key] = entry.value;
+    // 3개씩 배치로 나누어 호출
+    const batchSize = 3;
+    for (var i = 0; i < targets.length; i += batchSize) {
+      final batch = targets.skip(i).take(batchSize);
+      final futures = batch.map((name) async {
+        try {
+          final positions = await fetchTrainPositions(name);
+          return MapEntry(name, positions);
+        } catch (e) {
+          debugPrint('[SeoulSubwayAPI] 🚨 $name 조회 실패: $e');
+          lastApiError = '[$name] $e';
+          return MapEntry(name, <TrainPosition>[]);
+        }
+      });
+
+      final entries = await Future.wait(futures);
+      for (final entry in entries) {
+        if (entry.value.isNotEmpty) {
+          results[entry.key] = entry.value;
+        }
       }
     }
+    final totalTrains = results.values.fold<int>(0, (sum, list) => sum + list.length);
+    debugPrint('[SeoulSubwayAPI] 📊 결과: ${results.length}/${targets.length} 노선, '
+        '$totalTrains개 열차 | 오늘 사용: $_callCount/$dailyLimit'
+        '${lastApiError != null ? ' | 에러: $lastApiError' : ''}');
     return results;
   }
 

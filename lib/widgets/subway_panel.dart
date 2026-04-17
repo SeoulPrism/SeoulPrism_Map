@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../models/subway_models.dart';
+import '../services/seoul_subway_service.dart';
 import 'subway_overlay.dart';
 
 /// 지하철 실시간 정보 제어 패널 (접기/펼치기 지원)
@@ -56,13 +57,25 @@ class _SubwayControlPanelState extends State<SubwayControlPanel> {
           size: 18,
         ),
         const SizedBox(width: 8),
-        const Text(
-          'SUBWAY LIVE',
-          style: TextStyle(
-            fontWeight: FontWeight.bold,
-            fontSize: 12,
-            color: Colors.white,
-            letterSpacing: 1.2,
+        GestureDetector(
+          onTap: () {
+            // 모드 토글: DEMO ↔ LIVE
+            final next = widget.controller.mode == SubwayMode.demo
+                ? SubwayMode.live
+                : SubwayMode.demo;
+            widget.controller.setMode(next);
+            widget.onRefresh();
+          },
+          child: Text(
+            widget.controller.mode == SubwayMode.demo ? 'DEMO' : 'LIVE',
+            style: TextStyle(
+              fontWeight: FontWeight.bold,
+              fontSize: 12,
+              color: widget.controller.mode == SubwayMode.demo
+                  ? Colors.orangeAccent
+                  : Colors.white,
+              letterSpacing: 1.2,
+            ),
           ),
         ),
         const Spacer(),
@@ -101,8 +114,12 @@ class _SubwayControlPanelState extends State<SubwayControlPanel> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        _infoRow('모드', widget.controller.mode == SubwayMode.demo
+            ? '데모 (API 미사용)'
+            : 'Live (API ${widget.controller.fetchIntervalSec}s)'),
         _infoRow('열차 수', '${widget.controller.currentTrains.length}대'),
-        _infoRow('API 수신', '${widget.controller.totalTrainCount}건'),
+        if (widget.controller.mode == SubwayMode.live)
+          _infoRow('API', '${widget.controller.apiCallCount}/${SeoulSubwayService.dailyLimit}'),
         if (widget.controller.lastUpdate != null)
           _infoRow('갱신', _formatTime(widget.controller.lastUpdate!)),
         if (widget.controller.lastError != null)

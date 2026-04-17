@@ -15,6 +15,7 @@ void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
   MapboxOptions.setAccessToken(ApiKeys.mapboxAccessToken);
+  MapboxMapsOptions.setLanguage('ko');
 
   await NaverMapSdk.instance.initialize(
     clientId: ApiKeys.naverClientId,
@@ -140,8 +141,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
           // 지도 엔진
           Positioned.fill(key: ValueKey(_currentMapType), child: _buildActiveMapEngine()),
 
-          // 디버그 패널 (상단 우측)
-          Positioned(top: 60, right: 20, child: _buildDebugPanel()),
+          // 디버그 패널 — 개발 중 비활성화
+          // Positioned(top: 60, right: 20, child: _buildDebugPanel()),
 
           // 지하철 컨트롤 패널 (드래그 가능, 상단 좌측)
           Positioned(

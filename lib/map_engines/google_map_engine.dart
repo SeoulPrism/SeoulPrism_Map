@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import '../core/map_interface.dart';
+import '../models/subway_models.dart';
 
 class GoogleMapEngine extends StatefulWidget {
   final CameraInfo initialCamera;
@@ -176,4 +177,19 @@ class _GoogleMapEngineState extends State<GoogleMapEngine> implements IMapContro
       myLocationButtonEnabled: false,
     );
   }
+
+  // ── 3D (Google Maps에서는 미지원 — no-op) ──
+  @override
+  Future<void> init3DLayers() async {}
+  @override
+  void cleanup3DLayers() {}
+  @override
+  Future<void> updateTrainPositions3D(List<InterpolatedTrainPosition> trains) async {}
+  @override
+  Future<void> initRoutes3D(Map<String, List<List<double>>> routeCoordinates,
+      Map<String, Color> lineColors, Map<String, List<bool>> segmentUnderground) async {}
+  @override
+  Future<void> updateStations3D(List<Map<String, dynamic>> stations) async {}
+  @override
+  void setUndergroundVisible(bool visible) {}
 }

@@ -7,6 +7,9 @@ import '../data/seoul_subway_data.dart';
 /// API에서 받은 열차의 현재 역 + 상태(진입/도착/출발/전역출발) 정보를 기반으로
 /// 노선의 역 좌표 경로 위에서 실제 지도 좌표를 보간합니다.
 class TrainInterpolator {
+  // 3D 고도 설정 (미터)
+  static const double surfaceAltitude = 30.0; // 지상 열차 고도
+  static const double undergroundAltitude = 0.0; // 지하 열차 고도
   /// 노선 ID → 역명 → 역 인덱스 캐시
   final Map<String, Map<String, int>> _stationIndexCache = {};
 
@@ -47,19 +50,27 @@ class TrainInterpolator {
     final isUpbound = train.direction == 0;
 
     double lat, lng, bearing;
+    int fromIdx = stationIndex;
+    int toIdx = stationIndex;
+    double t = 0;
 
     switch (train.trainStatus) {
       case 1: // 도착: 현재 역 위치
         lat = stations[stationIndex].lat;
         lng = stations[stationIndex].lng;
         bearing = _calcBearing(stations, stationIndex, isUpbound);
+        fromIdx = stationIndex;
+        toIdx = stationIndex;
+        t = 1.0;
         break;
 
       case 2: // 출발: 현재역을 막 떠남 → 다음 역 방향으로 약간 이동
         final nextIdx = isUpbound
             ? (stationIndex > 0 ? stationIndex - 1 : stationIndex)
             : (stationIndex < stations.length - 1 ? stationIndex + 1 : stationIndex);
-        final t = 0.15; // 출발 직후
+        t = 0.15;
+        fromIdx = stationIndex;
+        toIdx = nextIdx;
         lat = _lerp(stations[stationIndex].lat, stations[nextIdx].lat, t);
         lng = _lerp(stations[stationIndex].lng, stations[nextIdx].lng, t);
         bearing = _bearingBetween(
@@ -68,11 +79,13 @@ class TrainInterpolator {
         );
         break;
 
-      case 0: // 진입: 현재역에 거의 도착 → 이전역에서 80% 진행
+      case 0: // 진입: 현재역에 거의 도착 → 이전역에서 85% 진행
         final prevIdx = isUpbound
             ? (stationIndex < stations.length - 1 ? stationIndex + 1 : stationIndex)
             : (stationIndex > 0 ? stationIndex - 1 : stationIndex);
-        final t = 0.85;
+        t = 0.85;
+        fromIdx = prevIdx;
+        toIdx = stationIndex;
         lat = _lerp(stations[prevIdx].lat, stations[stationIndex].lat, t);
         lng = _lerp(stations[prevIdx].lng, stations[stationIndex].lng, t);
         bearing = _bearingBetween(
@@ -85,7 +98,9 @@ class TrainInterpolator {
         final prevIdx = isUpbound
             ? (stationIndex < stations.length - 1 ? stationIndex + 1 : stationIndex)
             : (stationIndex > 0 ? stationIndex - 1 : stationIndex);
-        final t = 0.3;
+        t = 0.3;
+        fromIdx = prevIdx;
+        toIdx = stationIndex;
         lat = _lerp(stations[prevIdx].lat, stations[stationIndex].lat, t);
         lng = _lerp(stations[prevIdx].lng, stations[stationIndex].lng, t);
         bearing = _bearingBetween(
@@ -100,12 +115,22 @@ class TrainInterpolator {
         bearing = 0;
     }
 
+    // 3D 고도 계산: 지상/지하 구간 보간
+    final fromSurface = SeoulSubwayData.isSurfaceStation(stations[fromIdx].id);
+    final toSurface = SeoulSubwayData.isSurfaceStation(stations[toIdx].id);
+    final fromAlt = fromSurface ? surfaceAltitude : undergroundAltitude;
+    final toAlt = toSurface ? surfaceAltitude : undergroundAltitude;
+    final altitude = _lerp(fromAlt, toAlt, t);
+    final isUnderground = altitude < surfaceAltitude * 0.5;
+
     return InterpolatedTrainPosition(
       trainNo: train.trainNo,
       subwayId: train.subwayId,
       subwayName: train.subwayName,
       lat: lat,
       lng: lng,
+      altitude: altitude,
+      isUnderground: isUnderground,
       direction: train.direction,
       terminalName: train.terminalName,
       stationName: train.stationName,

@@ -24,6 +24,7 @@ class StationInfo {
   final double lat;
   final double lng;
   final List<String> transferLines; // 환승 가능한 노선 ID 목록
+  final bool isUnderground; // true: 지하, false: 지상
 
   const StationInfo({
     required this.id,
@@ -31,6 +32,7 @@ class StationInfo {
     required this.lat,
     required this.lng,
     this.transferLines = const [],
+    this.isUnderground = true,
   });
 }
 
@@ -238,6 +240,8 @@ class InterpolatedTrainPosition {
   final String subwayName;
   final double lat;
   final double lng;
+  final double altitude; // 3D 고도 (미터) — 지상: 30m, 지하: 0m
+  final bool isUnderground; // 현재 지하 구간 여부
   final int direction;
   final String terminalName;
   final String stationName;
@@ -252,6 +256,8 @@ class InterpolatedTrainPosition {
     required this.subwayName,
     required this.lat,
     required this.lng,
+    this.altitude = 0,
+    this.isUnderground = true,
     required this.direction,
     required this.terminalName,
     required this.stationName,
