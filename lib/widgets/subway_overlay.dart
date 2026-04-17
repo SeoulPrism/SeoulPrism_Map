@@ -6,6 +6,8 @@ import '../data/seoul_subway_data.dart';
 import '../services/seoul_subway_service.dart';
 import '../services/train_interpolator.dart';
 import '../services/train_simulator.dart';
+import '../data/subway_geojson_loader.dart';
+import '../data/route_geometry.dart';
 import '../core/map_interface.dart';
 
 /// 운행 모드
@@ -22,6 +24,7 @@ class SubwayOverlayController {
   final SeoulSubwayService _apiService = SeoulSubwayService();
   final TrainInterpolator _interpolator = TrainInterpolator();
   final TrainSimulator _simulator = TrainSimulator();
+  final RouteGeometry _routeGeometry = RouteGeometry();
 
   IMapController? _mapController;
   Timer? _refreshTimer;
@@ -100,10 +103,25 @@ class SubwayOverlayController {
     _lastError = null;
     onStateChanged?.call();
 
+    // OSM 노선 경로 초기화
+    try {
+      if (!_routeGeometry.isInitialized) {
+        await _routeGeometry.init();
+        _interpolator.setRouteGeometry(_routeGeometry);
+        _simulator.setRouteGeometry(_routeGeometry);
+      }
+    } catch (e) {
+      debugPrint('[SubwayOverlay] ⚠️ RouteGeometry 초기화 실패 (직선 폴백): $e');
+    }
+
     // 3D 레이어 초기화
-    if (!_layersInitialized3D) {
-      await _mapController?.init3DLayers();
-      _layersInitialized3D = true;
+    try {
+      if (!_layersInitialized3D) {
+        await _mapController?.init3DLayers();
+        _layersInitialized3D = true;
+      }
+    } catch (e) {
+      debugPrint('[SubwayOverlay] ⚠️ 3D 레이어 초기화 실패: $e');
     }
 
     // 초기 노선 + 역 그리기
@@ -115,15 +133,12 @@ class SubwayOverlayController {
     }
 
     if (_mode == SubwayMode.demo) {
-      // 데모 모드: 시뮬레이터 초기화 + 10초마다 갱신
+      // 데모 모드: 초기 스냅샷 1회 → 이후 getFramePositions()가 무한 전진
       _simulator.initDemoTrains();
       _fetchIntervalSec = _demoIntervalSec;
-      _updateFromSimulator();
-      _refreshTimer = Timer.periodic(
-        const Duration(seconds: _demoIntervalSec),
-        (_) => _updateFromSimulator(),
-      );
-      debugPrint('[SubwayOverlay] 🎮 데모 모드 시작');
+      _updateFromSimulatorContinuous();
+      // 타이머 없음 — 연속 보간이 자체적으로 구간 전환 처리
+      debugPrint('[SubwayOverlay] 🎮 데모 모드 시작 (60fps 연속 보간)');
     } else {
       // Live 모드: API 5분 + 매 프레임 연속 보간 (60fps)
       _fetchIntervalSec = _liveApiFetchSec;
@@ -249,14 +264,21 @@ class SubwayOverlayController {
         .toList();
   }
 
-  /// 시뮬레이터에서 데이터 가져와 렌더링 (데모 모드)
-  void _updateFromSimulator() {
+  /// 시뮬레이터에서 데이터 가져와 연속 보간 준비 (데모 모드)
+  /// Live 모드와 동일하게 OSM 경로를 따라 매 프레임 위치 계산
+  void _updateFromSimulatorContinuous() {
     if (!_isActive) return;
     final positions = _simulator.generateDemoPositions();
-    _applyTrainPositions(positions);
+    debugPrint('[SubwayOverlay] 🎮 데모 생성: ${positions.length}개');
+
+    // 연속 보간 시스템에 스냅샷으로 등록 (Live 모드와 동일한 경로)
+    _simulator.updateApiSnapshot(positions);
+    _simulator.prepareContinuousExtrapolation();
+
+    _totalTrainCount = positions.length;
     _lastUpdate = DateTime.now();
     _lastError = null;
-    debugPrint('[SubwayOverlay] 🎮 데모 열차 $_totalTrainCount개');
+    debugPrint('[SubwayOverlay] 🎮 데모 연속 보간 준비: ${positions.length}개');
     onStateChanged?.call();
   }
 
@@ -330,20 +352,11 @@ class SubwayOverlayController {
     }
   }
 
-  /// 애니메이션 틱: 열차 위치를 한 스텝 전진
+  /// 애니메이션 틱: 매 프레임 경로 추종 위치 계산 (데모/Live 공통)
   void _animationTick() {
     if (!_isActive || !_showTrains) return;
-
-    if (_mode == SubwayMode.live) {
-      // Live 모드: 매 프레임 시간표 기반 연속 위치 계산
-      _renderLiveContinuous();
-    } else {
-      // 데모 모드: 기존 prev→target 보간
-      if (_targetPositions.isEmpty) return;
-      _animProgress += 1.0 / _totalSteps;
-      if (_animProgress > 1.0) _animProgress = 1.0;
-      _renderAnimatedTrains();
-    }
+    // 데모/Live 모두 OSM 경로 기반 연속 보간 사용
+    _renderLiveContinuous();
   }
 
   /// Live 모드: 매 프레임 시간표 기반 연속 위치 렌더링 (60fps)
@@ -475,7 +488,7 @@ class SubwayOverlayController {
     return (rad * 180.0 / pi + 360) % 360;
   }
 
-  /// 지하철 노선 경로를 3D로 그리기 (지상/지하 구분)
+  /// 지하철 노선 경로를 3D로 그리기 (OSM GeoJSON 실제 선로 geometry 사용)
   Future<void> _drawSubwayRoutes() async {
     if (_mapController == null) return;
 
@@ -483,21 +496,68 @@ class SubwayOverlayController {
     final lineColors = <String, Color>{};
     final segmentUnderground = <String, List<bool>>{};
 
+    // OSM GeoJSON에서 실제 선로 geometry 로드
+    final geojsonRoutes = await SubwayGeoJsonLoader.load();
+
     for (final entry in SeoulSubwayData.lineIdToApiName.entries) {
       final lineId = entry.key;
       if (_selectedLines != null && !_selectedLines!.contains(lineId)) continue;
 
       final stations = SeoulSubwayData.getLineStations(lineId);
-      if (stations.length < 2) continue;
+      final color = SubwayColors.getColor(lineId);
 
-      routeCoords[lineId] = stations.map((s) => [s.lat, s.lng]).toList();
-      lineColors[lineId] = SubwayColors.getColor(lineId);
-      segmentUnderground[lineId] = stations
-          .map((s) => !SeoulSubwayData.isSurfaceStation(s.id))
-          .toList();
+      // GeoJSON 메인 경로가 있으면 사용, 없으면 역 직선 폴백
+      final geojsonCoords = geojsonRoutes[lineId];
+      if (geojsonCoords != null && geojsonCoords.length >= 2) {
+        routeCoords[lineId] = geojsonCoords;
+        lineColors[lineId] = color;
+        // 각 좌표점의 지하/지상 여부: 가장 가까운 역 기준으로 판별
+        segmentUnderground[lineId] = geojsonCoords.map((coord) {
+          final nearestStation = _findNearestStation(stations, coord[0], coord[1]);
+          return nearestStation != null
+              ? !SeoulSubwayData.isSurfaceStation(nearestStation.id)
+              : true; // 기본: 지하
+        }).toList();
+      } else if (stations.length >= 2) {
+        // GeoJSON 없는 노선: 기존 직선 폴백
+        routeCoords[lineId] = stations.map((s) => [s.lat, s.lng]).toList();
+        lineColors[lineId] = color;
+        segmentUnderground[lineId] = stations
+            .map((s) => !SeoulSubwayData.isSurfaceStation(s.id))
+            .toList();
+      }
+
+      // 지선도 추가 (seongsu, sinjeong, macheon 등)
+      for (final entry in geojsonRoutes.entries) {
+        if (entry.key.startsWith('${lineId}_') && entry.value.length >= 2) {
+          routeCoords[entry.key] = entry.value;
+          lineColors[entry.key] = color;
+          segmentUnderground[entry.key] = entry.value.map((coord) {
+            final nearestStation = _findNearestStation(stations, coord[0], coord[1]);
+            return nearestStation != null
+                ? !SeoulSubwayData.isSurfaceStation(nearestStation.id)
+                : true;
+          }).toList();
+        }
+      }
     }
 
     await _mapController!.initRoutes3D(routeCoords, lineColors, segmentUnderground);
+  }
+
+  /// 좌표에서 가장 가까운 역 찾기
+  StationInfo? _findNearestStation(List<StationInfo> stations, double lat, double lng) {
+    if (stations.isEmpty) return null;
+    StationInfo? nearest;
+    double minDist = double.infinity;
+    for (final s in stations) {
+      final d = (s.lat - lat) * (s.lat - lat) + (s.lng - lng) * (s.lng - lng);
+      if (d < minDist) {
+        minDist = d;
+        nearest = s;
+      }
+    }
+    return nearest;
   }
 
   /// 역 마커를 3D 스타일로 그리기 (MiniTokyo3D 스타일)
@@ -519,9 +579,11 @@ class SubwayOverlayController {
         if (addedNames.contains(station.name)) continue;
         addedNames.add(station.name);
 
+        // OSM 경로에 스냅된 좌표 사용 (없으면 원래 좌표)
+        final snapped = _routeGeometry.getStationPosition(lineId, station.name);
         stationData.add({
-          'lat': station.lat,
-          'lng': station.lng,
+          'lat': snapped?[0] ?? station.lat,
+          'lng': snapped?[1] ?? station.lng,
           'name': station.name,
           'color': colorStr,
           'isTransfer': station.transferLines.isNotEmpty,

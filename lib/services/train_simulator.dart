@@ -2,6 +2,7 @@ import 'dart:math';
 import 'package:flutter/foundation.dart';
 import '../models/subway_models.dart';
 import '../data/seoul_subway_data.dart';
+import '../data/route_geometry.dart';
 
 /// 시간표 기반 열차 위치 시뮬레이터
 ///
@@ -32,6 +33,14 @@ class TrainSimulator {
 
   // 연속 보간용 프리컴퓨트 상태
   final Map<String, _LiveTrainState> _liveStates = {};
+
+  // OSM 노선 경로 기반 보간
+  RouteGeometry? _routeGeometry;
+
+  /// RouteGeometry 설정 (초기화 후 호출)
+  void setRouteGeometry(RouteGeometry rg) {
+    _routeGeometry = rg;
+  }
 
   /// 데모 모드: 노선별 가상 열차 초기 배치
   /// 피크 시간(07-09, 17-19)은 배차간격 3분, 그 외 5분
@@ -323,16 +332,38 @@ class TrainSimulator {
         displayStatus = 1;
       }
 
-      final lat = _lerp(stations[fromIdx].lat, stations[toIdx].lat, t);
-      final lng = _lerp(stations[fromIdx].lng, stations[toIdx].lng, t);
+      // OSM 경로 기반 보간 또는 직선 폴백
+      double lat, lng, bearing;
+      final rg = _routeGeometry;
+      final lineId = state.snapshot.subwayId;
+      final fromName = stations[fromIdx].name;
+      final toName = stations[toIdx].name;
 
-      // 베어링 계산
-      double bearing;
-      if (fromIdx == toIdx) {
+      if (rg != null && rg.hasRoute(lineId) && fromIdx != toIdx) {
+        final pos = rg.interpolate(lineId, fromName, toName, t);
+        if (pos != null) {
+          lat = pos[0];
+          lng = pos[1];
+          bearing = rg.bearingAt(lineId, fromName, toName, t);
+        } else {
+          lat = _lerp(stations[fromIdx].lat, stations[toIdx].lat, t);
+          lng = _lerp(stations[fromIdx].lng, stations[toIdx].lng, t);
+          bearing = _bearingBetween(
+            stations[fromIdx].lat, stations[fromIdx].lng,
+            stations[toIdx].lat, stations[toIdx].lng,
+          );
+        }
+      } else if (fromIdx == toIdx) {
+        // 정차 중: 스냅된 역 좌표 사용
+        final snapped = rg?.getStationPosition(lineId, stations[fromIdx].name);
+        lat = snapped?[0] ?? stations[fromIdx].lat;
+        lng = snapped?[1] ?? stations[fromIdx].lng;
         bearing = state.isUpbound
             ? _calcDirectionBearing(stations, toIdx, true)
             : _calcDirectionBearing(stations, toIdx, false);
       } else {
+        lat = _lerp(stations[fromIdx].lat, stations[toIdx].lat, t);
+        lng = _lerp(stations[fromIdx].lng, stations[toIdx].lng, t);
         bearing = _bearingBetween(
           stations[fromIdx].lat, stations[fromIdx].lng,
           stations[toIdx].lat, stations[toIdx].lng,
@@ -417,12 +448,8 @@ class TrainSimulator {
     List<StationInfo> stations,
     double todaySec,
   ) {
-    // 운행 시간: 05:30 ~ 24:00 (다음날 00:00)
-    const startSec = 5 * 3600 + 30 * 60; // 05:30
-    const endSec = 24 * 3600; // 24:00
-    if (todaySec < startSec || todaySec > endSec) return null;
-
-    final elapsed = todaySec - startSec + sim.offsetSec;
+    // 데모 모드는 시간 무관하게 항상 운행 (자정 기준 오프셋만 사용)
+    final elapsed = todaySec + sim.offsetSec;
     final totalStations = stations.length;
     // 왕복 구간 수 = (역수-1) * 2
     final roundTripSegments = (totalStations - 1) * 2;
