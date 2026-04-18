@@ -162,6 +162,21 @@ class _NaverMapEngineState extends State<NaverMapEngine> implements IMapControll
   Future<void> init3DLayers() async {}
   @override
   void cleanup3DLayers() {}
+
+  @override
+  void setOnTrainTapped(void Function(String trainNo)? callback) {}
+  @override
+  void setOnStationTapped(void Function(String stationName)? callback) {}
+  @override
+  void followTrain(double lat, double lng, double bearing) {}
+  @override
+  void setOnMapTappedEmpty(VoidCallback? callback) {}
+  @override
+  void setSelectedTrain(String? trainNo) {}
+  @override
+  void setSelectedStation(String? stationName) {}
+  @override
+  void applyWeatherEffect({required String lightPreset, double fogOpacity = 0.0, double atmosphereRange = 1.0, double rainIntensity = 0.0, double snowIntensity = 0.0}) {}
   @override
   Future<void> updateTrainPositions3D(List<InterpolatedTrainPosition> trains) async {}
   @override

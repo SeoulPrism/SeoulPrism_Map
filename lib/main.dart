@@ -55,7 +55,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   double _pitch = 45.0;
   double _zoom = 13.0;
   bool _isTerrainEnabled = false;
-  String _lightPreset = 'day';
+  String _lightPreset = 'auto'; // auto = 환경 서비스에 의해 자동 결정
 
   CameraInfo _cameraInfo = CameraInfo(
     lat: 37.5665, lng: 126.9780, zoom: 13.0, pitch: 45.0, bearing: 0.0,
@@ -64,13 +64,24 @@ class _DashboardScreenState extends State<DashboardScreen> {
   // 지하철 오버레이 컨트롤러
   final SubwayOverlayController _subwayController = SubwayOverlayController();
 
-  // 도착정보 팝업 상태
+  // 도착정보 팝업 상태 (기존 버튼 방식용)
   String? _selectedStation;
   List<ArrivalInfo> _selectedStationArrivals = [];
   bool _showArrivalPanel = false;
 
   // 선택된 열차 정보
   InterpolatedTrainPosition? _selectedTrain;
+  InterpolatedTrainPosition? _lastSelectedTrain;
+
+  // 역 클릭 상세 패널
+  String? _selectedMapStation;
+  StationInfo? _selectedMapStationInfo;
+  List<ArrivalInfo> _selectedMapStationArrivals = [];
+  bool _mapStationLoading = false;
+  // 슬라이드아웃 애니메이션용
+  String? _lastSelectedMapStation;
+  StationInfo? _lastSelectedMapStationInfo;
+  List<ArrivalInfo> _lastMapStationArrivals = [];
 
   // 지하철 패널 드래그 위치
   Offset _subwayPanelOffset = const Offset(20, 60);
@@ -80,6 +91,33 @@ class _DashboardScreenState extends State<DashboardScreen> {
     super.initState();
     _subwayController.onStateChanged = () {
       if (mounted) setState(() {});
+    };
+    _subwayController.onTrainSelected = (train) {
+      if (mounted) {
+        setState(() {
+          _selectedTrain = train;
+          if (train != null) _lastSelectedTrain = train;
+        });
+      }
+    };
+    _subwayController.onStationSelected = (name, info, arrivals, loading) {
+      if (mounted) {
+        setState(() {
+          _selectedMapStation = name;
+          _selectedMapStationInfo = info;
+          _selectedMapStationArrivals = arrivals;
+          _mapStationLoading = loading;
+          if (name != null) {
+            _lastSelectedMapStation = name;
+            _lastSelectedMapStationInfo = info;
+            _lastMapStationArrivals = arrivals;
+          }
+          // 역 도착 데이터 갱신 시 last도 업데이트
+          if (name != null && !loading) {
+            _lastMapStationArrivals = arrivals;
+          }
+        });
+      }
     };
   }
 
@@ -182,16 +220,45 @@ class _DashboardScreenState extends State<DashboardScreen> {
               ),
             ),
 
-          // 열차 정보 툴팁
-          if (_selectedTrain != null)
-            Positioned(
-              bottom: 80,
+          // 열차 상세 패널 (바텀 슬라이드 애니메이션)
+          if (_lastSelectedTrain != null)
+            AnimatedPositioned(
+              duration: const Duration(milliseconds: 350),
+              curve: _selectedTrain != null ? Curves.easeOutCubic : Curves.easeInCubic,
+              bottom: _selectedTrain != null ? 70 : -280,
               left: 0,
               right: 0,
-              child: Center(
-                child: TrainInfoTooltip(
-                  train: _selectedTrain!,
-                  onClose: () => setState(() => _selectedTrain = null),
+              child: AnimatedOpacity(
+                duration: const Duration(milliseconds: 300),
+                opacity: _selectedTrain != null ? 1.0 : 0.0,
+                child: TrainDetailPanel(
+                  train: (_selectedTrain ?? _lastSelectedTrain)!,
+                  onClose: () {
+                    _subwayController.deselectTrain();
+                  },
+                ),
+              ),
+            ),
+
+          // 역 상세 패널 (바텀 슬라이드 애니메이션)
+          if (_lastSelectedMapStation != null)
+            AnimatedPositioned(
+              duration: const Duration(milliseconds: 350),
+              curve: _selectedMapStation != null ? Curves.easeOutCubic : Curves.easeInCubic,
+              bottom: _selectedMapStation != null ? 70 : -450,
+              left: 0,
+              right: 0,
+              child: AnimatedOpacity(
+                duration: const Duration(milliseconds: 300),
+                opacity: _selectedMapStation != null ? 1.0 : 0.0,
+                child: StationDetailPanel(
+                  stationName: (_selectedMapStation ?? _lastSelectedMapStation)!,
+                  stationInfo: _selectedMapStation != null ? _selectedMapStationInfo : _lastSelectedMapStationInfo,
+                  arrivals: _selectedMapStation != null ? _selectedMapStationArrivals : _lastMapStationArrivals,
+                  isLoading: _mapStationLoading,
+                  onClose: () {
+                    _subwayController.deselectStation();
+                  },
                 ),
               ),
             ),
@@ -283,15 +350,27 @@ class _DashboardScreenState extends State<DashboardScreen> {
             const Spacer(),
             DropdownButton<String>(
               value: _lightPreset,
-              items: ['day', 'night', 'dawn', 'dusk']
+              items: ['auto', 'day', 'night', 'dawn', 'dusk']
                   .map((e) => DropdownMenuItem(
                       value: e,
-                      child: Text(e.toUpperCase(), style: const TextStyle(fontSize: 10))))
+                      child: Text(e.toUpperCase(), style: TextStyle(
+                        fontSize: 10,
+                        color: e == 'auto' ? Colors.greenAccent : null,
+                      ))))
                   .toList(),
               onChanged: (v) {
                 if (v != null) {
                   setState(() => _lightPreset = v);
-                  _mapController?.setLightPreset(v);
+                  _subwayController.autoLighting = (v == 'auto');
+                  if (v == 'auto') {
+                    // 환경 서비스가 다시 제어 — 즉시 적용
+                    final env = _subwayController.environment;
+                    if (env != null) {
+                      _mapController?.applyWeatherEffect(lightPreset: env.lightPreset);
+                    }
+                  } else {
+                    _mapController?.setLightPreset(v);
+                  }
                 }
               },
             ),

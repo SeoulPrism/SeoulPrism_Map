@@ -79,6 +79,33 @@ abstract class IMapController {
 
   /// 3D Style Layer 정리
   void cleanup3DLayers() {}
+
+  /// 열차 탭 콜백 설정 (Mapbox only)
+  void setOnTrainTapped(void Function(String trainNo)? callback) {}
+
+  /// 역 탭 콜백 설정 (Mapbox only)
+  void setOnStationTapped(void Function(String stationName)? callback) {}
+
+  /// 선택된 열차 따라가기 — 카메라 이동 (Mapbox only)
+  void followTrain(double lat, double lng, double bearing) {}
+
+  /// 열차 선택 해제 시 호출 — 맵 빈 곳 탭 (Mapbox only)
+  void setOnMapTappedEmpty(VoidCallback? callback) {}
+
+  /// 선택된 열차 번호 설정 (하이라이트 표시용)
+  void setSelectedTrain(String? trainNo) {}
+
+  /// 선택된 역 이름 설정 (하이라이트 표시용)
+  void setSelectedStation(String? stationName) {}
+
+  /// 날씨 시각 효과 적용 (안개, 비, 눈 등)
+  void applyWeatherEffect({
+    required String lightPreset,
+    double fogOpacity = 0.0,
+    double atmosphereRange = 1.0,
+    double rainIntensity = 0.0,
+    double snowIntensity = 0.0,
+  }) {}
 }
 
 class CameraInfo {

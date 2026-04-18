@@ -9,6 +9,7 @@ import '../services/train_simulator.dart';
 import '../data/subway_geojson_loader.dart';
 import '../data/route_geometry.dart';
 import '../core/map_interface.dart';
+import '../services/environment_service.dart';
 
 /// 운행 모드
 enum SubwayMode {
@@ -25,6 +26,7 @@ class SubwayOverlayController {
   final TrainInterpolator _interpolator = TrainInterpolator();
   final TrainSimulator _simulator = TrainSimulator();
   final RouteGeometry _routeGeometry = RouteGeometry();
+  final EnvironmentService _envService = EnvironmentService();
 
   IMapController? _mapController;
   Timer? _refreshTimer;
@@ -34,6 +36,7 @@ class SubwayOverlayController {
   bool _showTrains = true;
   bool _showStations = true;
   SubwayMode _mode = SubwayMode.demo;
+  bool autoLighting = true; // true = 환경 서비스가 라이팅 제어
 
   // 현재 상태
   List<InterpolatedTrainPosition> _currentTrains = [];
@@ -63,9 +66,23 @@ class SubwayOverlayController {
   // 선택된 노선 필터 (null이면 전부 표시)
   Set<String>? _selectedLines;
 
+  // 열차 선택 & 카메라 추적
+  String? _selectedTrainNo;
+  InterpolatedTrainPosition? _selectedTrainData;
+  DateTime? _followStartTime; // flyTo 애니메이션 완료 대기용
+  static const int _flyToDurationMs = 900; // flyTo 시간 (ms)
+
+  // 역 선택 상태
+  String? _selectedStationName;
+  StationInfo? _selectedStationInfo;
+  List<ArrivalInfo> _selectedStationArrivals = [];
+  bool _stationLoading = false;
+
   // 콜백
   VoidCallback? onStateChanged;
   void Function(String stationName, List<ArrivalInfo> arrivals)? onStationTapped;
+  void Function(InterpolatedTrainPosition? train)? onTrainSelected;
+  void Function(String? stationName, StationInfo? info, List<ArrivalInfo> arrivals, bool loading)? onStationSelected;
 
   // Getters
   bool get isActive => _isActive;
@@ -81,9 +98,114 @@ class SubwayOverlayController {
   int get apiCallCount => _apiService.callCount;
   int get apiRemainingCalls => _apiService.remainingCalls;
   int get fetchIntervalSec => _fetchIntervalSec;
+  EnvironmentData? get environment => _envService.current;
+  String? get selectedStationName => _selectedStationName;
+  StationInfo? get selectedStationInfo => _selectedStationInfo;
+  List<ArrivalInfo> get selectedStationArrivals => _selectedStationArrivals;
+  bool get stationLoading => _stationLoading;
+  String? get selectedTrainNo => _selectedTrainNo;
+  InterpolatedTrainPosition? get selectedTrainData => _selectedTrainData;
 
   void attachMap(IMapController controller) {
     _mapController = controller;
+
+    // 열차 탭 콜백 등록
+    controller.setOnTrainTapped((trainNo) {
+      deselectStation(); // 역 선택 해제
+      selectTrain(trainNo);
+    });
+    // 역 탭 콜백 등록
+    controller.setOnStationTapped((stationName) {
+      deselectTrain(); // 열차 선택 해제
+      selectStation(stationName);
+    });
+    controller.setOnMapTappedEmpty(() {
+      deselectTrain();
+      deselectStation();
+    });
+  }
+
+  /// 열차 선택 (카메라 추적 시작)
+  void selectTrain(String trainNo) {
+    // 다른 열차로 전환 시 flyTo 재실행을 위해 리셋
+    _mapController?.setSelectedTrain(null); // _isFollowing = false
+    _selectedTrainNo = trainNo;
+    _followStartTime = DateTime.now(); // flyTo 완료까지 프레임 추적 차단
+    _mapController?.setSelectedTrain(trainNo);
+    // 현재 열차 목록에서 해당 열차 찾기
+    _selectedTrainData = _findTrain(trainNo);
+    if (_selectedTrainData != null) {
+      _mapController?.followTrain(
+        _selectedTrainData!.lat,
+        _selectedTrainData!.lng,
+        _selectedTrainData!.bearing,
+      );
+    }
+    onTrainSelected?.call(_selectedTrainData);
+    onStateChanged?.call();
+  }
+
+  /// 열차 선택 해제
+  void deselectTrain() {
+    _selectedTrainNo = null;
+    _selectedTrainData = null;
+    _followStartTime = null;
+    _mapController?.setSelectedTrain(null);
+    onTrainSelected?.call(null);
+    onStateChanged?.call();
+  }
+
+  /// 역 선택 (도착정보 조회 + 카메라 이동)
+  Future<void> selectStation(String stationName) async {
+    _selectedStationName = stationName;
+    _selectedStationInfo = SeoulSubwayData.findStation(stationName);
+    _selectedStationArrivals = [];
+    _stationLoading = true;
+
+    // 카메라를 역으로 이동
+    if (_selectedStationInfo != null) {
+      _mapController?.moveTo(
+        _selectedStationInfo!.lat,
+        _selectedStationInfo!.lng,
+        zoom: 15.5,
+        pitch: 50,
+      );
+    }
+
+    // 역 하이라이트 효과
+    _mapController?.setSelectedStation(stationName);
+
+    onStationSelected?.call(stationName, _selectedStationInfo, [], true);
+    onStateChanged?.call();
+
+    // 도착정보 fetch
+    final arrivals = await getStationArrivals(stationName);
+    if (_selectedStationName == stationName) {
+      _selectedStationArrivals = arrivals;
+      _stationLoading = false;
+      onStationSelected?.call(stationName, _selectedStationInfo, arrivals, false);
+      onStateChanged?.call();
+    }
+  }
+
+  /// 역 선택 해제
+  void deselectStation() {
+    if (_selectedStationName == null) return;
+    _selectedStationName = null;
+    _selectedStationInfo = null;
+    _selectedStationArrivals = [];
+    _stationLoading = false;
+    _mapController?.setSelectedStation(null);
+    onStationSelected?.call(null, null, [], false);
+    onStateChanged?.call();
+  }
+
+  /// 열차 번호로 현재 목록에서 검색
+  InterpolatedTrainPosition? _findTrain(String trainNo) {
+    for (final train in _currentTrains) {
+      if (train.trainNo == trainNo) return train;
+    }
+    return null;
   }
 
   /// 모드 변경 (활성 상태면 재시작)
@@ -155,11 +277,47 @@ class SubwayOverlayController {
       const Duration(milliseconds: _animIntervalMs),
       (_) => _animationTick(),
     );
+
+    // 환경 서비스 (시간/날씨) 시작
+    _envService.onUpdated = () {
+      _applyEnvironment();
+      onStateChanged?.call();
+    };
+    _envService.start();
+  }
+
+  /// 환경(시간/날씨) 효과 맵에 적용
+  void _applyEnvironment() {
+    final env = _envService.current;
+    if (env == null || _mapController == null) return;
+    if (!autoLighting) return; // 수동 오버라이드 중
+
+    double fogOpacity = 0.0;
+    if (env.weather == WeatherCondition.fog) {
+      fogOpacity = 0.6;
+    } else if (env.weather == WeatherCondition.rain || env.weather == WeatherCondition.drizzle) {
+      fogOpacity = 0.3;
+    } else if (env.weather == WeatherCondition.snow) {
+      fogOpacity = 0.25;
+    } else if (env.weather == WeatherCondition.thunderstorm) {
+      fogOpacity = 0.4;
+    } else if (env.visibility < 5) {
+      fogOpacity = (1.0 - env.visibility / 5.0) * 0.5;
+    }
+
+    _mapController!.applyWeatherEffect(
+      lightPreset: env.lightPreset,
+      fogOpacity: fogOpacity,
+    );
+
+    debugPrint('[SubwayOverlay] 🌤️ 환경 적용: ${env.lightPreset} | '
+        '${env.weatherDescription} ${env.temperature.toStringAsFixed(1)}°C');
   }
 
   /// 시각화 중지
   void stop() {
     _isActive = false;
+    _envService.stop();
     _refreshTimer?.cancel();
     _refreshTimer = null;
     _animationTimer?.cancel();
@@ -425,6 +583,28 @@ class SubwayOverlayController {
     _currentTrains = filtered;
     _totalTrainCount = filtered.length;
     _mapController!.updateTrainPositions3D(filtered);
+
+    // 선택된 열차 카메라 추적
+    if (_selectedTrainNo != null) {
+      final tracked = _findTrain(_selectedTrainNo!);
+      if (tracked != null) {
+        // flyTo 애니메이션 완료 전까지는 easeTo 호출 차단
+        final flyToElapsed = _followStartTime != null
+            ? DateTime.now().difference(_followStartTime!).inMilliseconds
+            : _flyToDurationMs + 1;
+        if (flyToElapsed > _flyToDurationMs) {
+          _mapController!.followTrain(tracked.lat, tracked.lng, tracked.bearing);
+        }
+
+        // 역 정보가 바뀔 때만 UI 갱신 (매 프레임 setState 방지)
+        if (_selectedTrainData?.stationName != tracked.stationName ||
+            _selectedTrainData?.trainStatus != tracked.trainStatus) {
+          _selectedTrainData = tracked;
+          onTrainSelected?.call(tracked);
+        }
+        _selectedTrainData = tracked;
+      }
+    }
   }
 
   /// 현재 애니메이션 진행도에 따라 열차 렌더링 (3D) — 데모 모드용
@@ -602,6 +782,7 @@ class SubwayOverlayController {
 
   void dispose() {
     stop();
+    _envService.dispose();
   }
 }
 

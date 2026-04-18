@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart';
 import '../core/map_interface.dart';
 import '../models/subway_models.dart';
+import '../data/seoul_subway_data.dart';
 
 class MapboxEngine extends StatefulWidget {
   final CameraInfo initialCamera;
@@ -32,6 +33,10 @@ class _MapboxEngineState extends State<MapboxEngine> implements IMapController {
   // ── 3D Style Layer 관련 ──
   static const _trainSourceId = 'subway-trains-source';
   static const _trainLayerId = 'subway-trains-layer';
+  static const _selectedTrainSourceId = 'subway-selected-train-source';
+  static const _selectedTrainLayerId = 'subway-selected-train-layer';
+  static const _selectedStationSourceId = 'subway-selected-station-source';
+  static const _selectedStationLayerId = 'subway-selected-station-layer';
   static const _routeSurfaceSourceId = 'subway-routes-surface-source';
   static const _routeSurfaceLayerId = 'subway-routes-surface-layer';
   static const _routeUndergroundSourceId = 'subway-routes-underground-source';
@@ -43,6 +48,14 @@ class _MapboxEngineState extends State<MapboxEngine> implements IMapController {
   bool _layersInitialized3D = false;
   // ignore: unused_field
   bool _undergroundVisible = true;
+
+  // 열차 탭 / 맵 빈 곳 탭 콜백
+  void Function(String trainNo)? _onTrainTapped;
+  void Function(String stationName)? _onStationTapped;
+  VoidCallback? _onMapTappedEmpty;
+  bool _isFollowing = false;
+  String? _selectedTrainNo;
+  String? _selectedStationName;
 
   // 서울 위도에서의 미터→도 변환 계수
   static const double _mPerDegLat = 111320.0;
@@ -89,7 +102,37 @@ class _MapboxEngineState extends State<MapboxEngine> implements IMapController {
 
   @override
   void setLightPreset(String preset) {
-    _mapboxMap?.style.setStyleLayerProperty("basemap", "light-preset", preset);
+    try {
+      _mapboxMap?.style.setStyleImportConfigProperty("basemap", "lightPreset", preset);
+    } catch (e) {
+      debugPrint('[MapboxEngine] lightPreset 설정 실패: $e');
+    }
+  }
+
+  @override
+  void applyWeatherEffect({
+    required String lightPreset,
+    double fogOpacity = 0.0,
+    double atmosphereRange = 1.0,
+    double rainIntensity = 0.0,
+    double snowIntensity = 0.0,
+  }) {
+    if (_mapboxMap == null) return;
+
+    // 1) 라이트 프리셋 적용
+    setLightPreset(lightPreset);
+
+    // 2) Fog (안개/시정 효과) — Standard style atmosphere config
+    if (fogOpacity > 0) {
+      try {
+        // Standard style의 fog 설정 — config property 사용
+        _mapboxMap!.style.setStyleImportConfigProperty(
+          "basemap", "fog", fogOpacity > 0.3 ? "high" : "low",
+        );
+      } catch (e) {
+        debugPrint('[MapboxEngine] fog 설정 실패 (무시): $e');
+      }
+    }
   }
 
   @override
@@ -216,6 +259,14 @@ class _MapboxEngineState extends State<MapboxEngine> implements IMapController {
     );
   }
 
+  /// Color 밝게 만들기 (amount: 0.0~1.0)
+  static Color _brightenColor(Color c, double amount) {
+    final r = (c.r + (1.0 - c.r) * amount).clamp(0.0, 1.0);
+    final g = (c.g + (1.0 - c.g) * amount).clamp(0.0, 1.0);
+    final b = (c.b + (1.0 - c.b) * amount).clamp(0.0, 1.0);
+    return Color.from(alpha: c.a, red: r, green: g, blue: b);
+  }
+
   /// Color → CSS rgba 문자열
   static String _colorToRgba(Color c) {
     final r = (c.r * 255).round().clamp(0, 255);
@@ -239,7 +290,7 @@ class _MapboxEngineState extends State<MapboxEngine> implements IMapController {
       // 1) 열차 위치 — FillExtrusionLayer (실제 3D 블록)
       await style.addSource(GeoJsonSource(id: _trainSourceId, data: emptyGeoJson));
 
-      // 3D 기둥 (메인 몸체)
+      // 3D 기둥 (메인 몸체) — emissive로 야간에도 자체 발광
       await style.addLayer(FillExtrusionLayer(
         id: _trainLayerId,
         sourceId: _trainSourceId,
@@ -248,9 +299,77 @@ class _MapboxEngineState extends State<MapboxEngine> implements IMapController {
         fillExtrusionHeightExpression: ['get', 'top'],
         fillExtrusionOpacity: 0.85,
         fillExtrusionVerticalGradient: true,
+        fillExtrusionEmissiveStrength: 1.0,
       ));
 
       debugPrint('[MapboxEngine] ✅ 열차 FillExtrusionLayer 생성 완료');
+
+      // 1-b) 선택된 열차 하이라이트 — 노선색 발광 링 (CircleLayer)
+      await style.addSource(GeoJsonSource(id: _selectedTrainSourceId, data: emptyGeoJson));
+
+      // 외곽 발광 (큰 원 + 블러)
+      await style.addLayer(CircleLayer(
+        id: _selectedTrainLayerId,
+        sourceId: _selectedTrainSourceId,
+        circleColorExpression: ['to-color', ['get', 'color']],
+        circleRadiusExpression: [
+          'interpolate', ['linear'], ['zoom'],
+          10, 8.0,
+          13, 16.0,
+          15, 28.0,
+          17, 45.0,
+        ],
+        circleBlur: 0.6,
+        circleOpacityExpression: ['get', 'opacity'],
+        circlePitchAlignment: CirclePitchAlignment.MAP,
+        circleSortKey: 9,
+        circleEmissiveStrength: 1.0,
+      ));
+
+      // 내부 링 (선명한 작은 원)
+      await style.addLayer(CircleLayer(
+        id: '${_selectedTrainLayerId}-inner',
+        sourceId: _selectedTrainSourceId,
+        circleColorExpression: ['to-color', ['get', 'color']],
+        circleRadiusExpression: [
+          'interpolate', ['linear'], ['zoom'],
+          10, 4.0,
+          13, 8.0,
+          15, 14.0,
+          17, 22.0,
+        ],
+        circleOpacityExpression: ['get', 'innerOpacity'],
+        circleStrokeColorExpression: ['to-color', ['get', 'color']],
+        circleStrokeWidthExpression: [
+          'interpolate', ['linear'], ['zoom'],
+          10, 1.0,
+          15, 2.5,
+        ],
+        circleStrokeOpacity: 0.9,
+        circlePitchAlignment: CirclePitchAlignment.MAP,
+        circleSortKey: 10,
+        circleEmissiveStrength: 1.0,
+      ));
+
+      // 1-c) 선택된 역 하이라이트 — 발광 링 (CircleLayer)
+      await style.addSource(GeoJsonSource(id: _selectedStationSourceId, data: emptyGeoJson));
+      await style.addLayer(CircleLayer(
+        id: _selectedStationLayerId,
+        sourceId: _selectedStationSourceId,
+        circleColorExpression: ['to-color', ['get', 'color']],
+        circleRadiusExpression: [
+          'interpolate', ['linear'], ['zoom'],
+          10, 10.0,
+          13, 22.0,
+          15, 38.0,
+          17, 55.0,
+        ],
+        circleBlur: 0.5,
+        circleOpacityExpression: ['get', 'opacity'],
+        circlePitchAlignment: CirclePitchAlignment.MAP,
+        circleSortKey: 2,
+        circleEmissiveStrength: 1.0,
+      ));
 
       // 2) 지상 노선 경로 — LineLayer (3D 고도)
       await style.addSource(GeoJsonSource(id: _routeSurfaceSourceId, data: emptyGeoJson));
@@ -269,6 +388,7 @@ class _MapboxEngineState extends State<MapboxEngine> implements IMapController {
         lineOpacity: 0.9,
         lineCap: LineCap.ROUND,
         lineJoin: LineJoin.ROUND,
+        lineEmissiveStrength: 0.8,
       ));
 
       debugPrint('[MapboxEngine] ✅ 지상 노선 LineLayer 생성 완료');
@@ -287,10 +407,11 @@ class _MapboxEngineState extends State<MapboxEngine> implements IMapController {
           14, 4.0,
           17, 7.0,
         ],
-        lineOpacity: 0.3,
+        lineOpacity: 0.7,
         lineDasharray: [3.0, 2.0],
         lineCap: LineCap.ROUND,
         lineJoin: LineJoin.ROUND,
+        lineEmissiveStrength: 1.0,
       ));
 
       debugPrint('[MapboxEngine] ✅ 지하 노선 LineLayer 생성 완료');
@@ -303,18 +424,18 @@ class _MapboxEngineState extends State<MapboxEngine> implements IMapController {
         id: _stationOutlineLayerId,
         sourceId: _stationSourceId,
         circleColorExpression: ['to-color', ['get', 'color']],
-        // 줌에 따라 크기 변화 (MiniTokyo3D 스타일)
         circleRadiusExpression: [
           'interpolate', ['linear'], ['zoom'],
-          8, 1.5,    // 줌 8: 아주 작게
-          11, 3.0,   // 줌 11: 작게
-          13, 5.0,   // 줌 13: 보통
-          15, 8.0,   // 줌 15: 크게
-          17, 12.0,  // 줌 17: 아주 크게
+          8, 1.5,
+          11, 3.0,
+          13, 5.0,
+          15, 8.0,
+          17, 12.0,
         ],
         circleStrokeWidth: 0.0,
         circlePitchAlignment: CirclePitchAlignment.MAP,
         circleSortKey: 3,
+        circleEmissiveStrength: 0.8,
       ));
 
       // 역 내부 (흰색 — MiniTokyo3D 스타일)
@@ -333,6 +454,7 @@ class _MapboxEngineState extends State<MapboxEngine> implements IMapController {
         circleStrokeWidth: 0.0,
         circlePitchAlignment: CirclePitchAlignment.MAP,
         circleSortKey: 4,
+        circleEmissiveStrength: 0.8,
       ));
 
       // 환승역은 더 크게 (isTransfer property)
@@ -352,6 +474,7 @@ class _MapboxEngineState extends State<MapboxEngine> implements IMapController {
         textOptional: true,
         textAllowOverlap: false,
         minZoom: 14.0,
+        textEmissiveStrength: 1.0,
       ));
 
       debugPrint('[MapboxEngine] ✅ 역 마커 레이어 생성 완료');
@@ -368,12 +491,15 @@ class _MapboxEngineState extends State<MapboxEngine> implements IMapController {
 
     for (final layerId in [
       _stationLabelLayerId, _stationDotLayerId, _stationOutlineLayerId,
-      _trainLayerId, _routeSurfaceLayerId, _routeUndergroundLayerId,
+      _selectedStationLayerId,
+      '${_selectedTrainLayerId}-inner', _selectedTrainLayerId, _trainLayerId,
+      _routeSurfaceLayerId, _routeUndergroundLayerId,
     ]) {
       style.removeStyleLayer(layerId);
     }
     for (final sourceId in [
-      _stationSourceId, _trainSourceId,
+      _stationSourceId, _selectedStationSourceId,
+      _selectedTrainSourceId, _trainSourceId,
       _routeSurfaceSourceId, _routeUndergroundSourceId,
     ]) {
       style.removeStyleSource(sourceId);
@@ -481,7 +607,12 @@ class _MapboxEngineState extends State<MapboxEngine> implements IMapController {
 
     final features = trains.map((train) {
       final color = SubwayColors.getColor(train.subwayId);
-      final colorStr = _colorToRgba(color);
+      final isSelected = train.trainNo == _selectedTrainNo;
+      // 선택된 열차: 밝은 색 + 더 높게
+      final colorStr = isSelected
+          ? _colorToRgba(_brightenColor(color, 0.3))
+          : _colorToRgba(color);
+      final height = isSelected ? trainHeight + 10 : trainHeight;
       final isExpress = train.expressType == 1;
       final polygon = _trainPolygon(
         train.lat, train.lng, train.bearing, isExpress, train.direction,
@@ -496,7 +627,16 @@ class _MapboxEngineState extends State<MapboxEngine> implements IMapController {
         'properties': {
           'color': colorStr,
           'base': train.altitude,
-          'top': train.altitude + trainHeight,
+          'top': train.altitude + height,
+          'trainNo': train.trainNo,
+          'subwayId': train.subwayId,
+          'subwayName': train.subwayName,
+          'stationName': train.stationName,
+          'direction': train.direction,
+          'terminalName': train.terminalName,
+          'trainStatus': train.trainStatus,
+          'expressType': train.expressType,
+          'isLastTrain': train.isLastTrain,
         },
       };
     }).toList();
@@ -508,7 +648,79 @@ class _MapboxEngineState extends State<MapboxEngine> implements IMapController {
 
     await _updateSourceData(_trainSourceId, geojson);
 
-    // 열차 업데이트 로그는 주기적으로만 (애니메이션 매 틱마다 호출되므로 생략)
+    // 선택된 열차 하이라이트 (발광 링 + 펄스)
+    if (_selectedTrainNo != null) {
+      final selectedFeatures = <Map<String, dynamic>>[];
+      for (final train in trains) {
+        if (train.trainNo == _selectedTrainNo) {
+          final color = SubwayColors.getColor(train.subwayId);
+          final colorStr = _colorToRgba(color);
+
+          // 펄스 애니메이션 (1500ms 주기, 삼각파)
+          final p = (DateTime.now().millisecondsSinceEpoch % 1500) / 1500.0 * 2.0;
+          final pulse = p < 1.0 ? p : 2.0 - p; // 0→1→0
+          final outerOpacity = 0.15 + pulse * 0.35; // 0.15 ~ 0.50
+          final innerOpacity = 0.05 + pulse * 0.15; // 0.05 ~ 0.20
+
+          selectedFeatures.add({
+            'type': 'Feature',
+            'geometry': {
+              'type': 'Point',
+              'coordinates': [train.lng, train.lat],
+            },
+            'properties': {
+              'color': colorStr,
+              'opacity': outerOpacity,
+              'innerOpacity': innerOpacity,
+            },
+          });
+          break;
+        }
+      }
+      await _updateSourceData(_selectedTrainSourceId, jsonEncode({
+        'type': 'FeatureCollection',
+        'features': selectedFeatures,
+      }));
+    } else {
+      await _updateSourceData(_selectedTrainSourceId,
+        '{"type":"FeatureCollection","features":[]}');
+    }
+
+    // 선택된 역 하이라이트 (발광 링 + 펄스)
+    if (_selectedStationName != null) {
+      final station = SeoulSubwayData.findStation(_selectedStationName!);
+      if (station != null) {
+        // 역이 속한 첫 번째 노선 색상
+        Color stationColor = Colors.blueAccent;
+        for (final entry in SeoulSubwayData.lineIdToApiName.entries) {
+          final stations = SeoulSubwayData.getLineStations(entry.key);
+          if (stations.any((s) => s.name == _selectedStationName)) {
+            stationColor = SubwayColors.getColor(entry.key);
+            break;
+          }
+        }
+        final colorStr = _colorToRgba(stationColor);
+
+        final p = (DateTime.now().millisecondsSinceEpoch % 2000) / 2000.0 * 2.0;
+        final pulse = p < 1.0 ? p : 2.0 - p;
+        final opacity = 0.2 + pulse * 0.4;
+
+        await _updateSourceData(_selectedStationSourceId, jsonEncode({
+          'type': 'FeatureCollection',
+          'features': [{
+            'type': 'Feature',
+            'geometry': {
+              'type': 'Point',
+              'coordinates': [station.lng, station.lat],
+            },
+            'properties': {
+              'color': colorStr,
+              'opacity': opacity,
+            },
+          }],
+        }));
+      }
+    }
   }
 
   @override
@@ -624,8 +836,74 @@ class _MapboxEngineState extends State<MapboxEngine> implements IMapController {
     }
   }
 
+  @override
+  void setOnTrainTapped(void Function(String trainNo)? callback) {
+    _onTrainTapped = callback;
+  }
+
+  @override
+  void setOnStationTapped(void Function(String stationName)? callback) {
+    _onStationTapped = callback;
+  }
+
+  @override
+  void setOnMapTappedEmpty(VoidCallback? callback) {
+    _onMapTappedEmpty = callback;
+  }
+
+  @override
+  void setSelectedTrain(String? trainNo) {
+    _selectedTrainNo = trainNo;
+    if (trainNo == null) {
+      _isFollowing = false;
+    }
+  }
+
+  @override
+  void setSelectedStation(String? stationName) {
+    _selectedStationName = stationName;
+    if (stationName == null) {
+      // 하이라이트 제거
+      _updateSourceData(_selectedStationSourceId,
+        '{"type":"FeatureCollection","features":[]}');
+    }
+  }
+
+  @override
+  void followTrain(double lat, double lng, double bearing) {
+    if (_mapboxMap == null) return;
+    if (!_isFollowing) {
+      // 최초 선택 또는 열차 전환 시 flyTo로 부드럽게 이동
+      _isFollowing = true;
+      _flyToEndTime = DateTime.now().millisecondsSinceEpoch + _flyToDurationMs;
+      _mapboxMap!.flyTo(
+        CameraOptions(
+          center: Point(coordinates: Position(lng, lat)),
+          zoom: 15.5,
+          pitch: 55,
+        ),
+        MapAnimationOptions(duration: _flyToDurationMs),
+      );
+    } else {
+      // flyTo 진행 중이면 무시
+      if (DateTime.now().millisecondsSinceEpoch < _flyToEndTime) return;
+      // 추적 중: setCamera로 강제 고정
+      _mapboxMap!.setCamera(CameraOptions(
+        center: Point(coordinates: Position(lng, lat)),
+      ));
+    }
+  }
+
+  static const int _flyToDurationMs = 800;
+  int _flyToEndTime = 0;
+
   void _onMapCreated(MapboxMap mapboxMap) {
     _mapboxMap = mapboxMap;
+
+    // 맵 탭 리스너 — 열차 클릭 감지
+    mapboxMap.setOnMapTapListener((mapContentGestureContext) {
+      _handleMapTap(mapContentGestureContext);
+    });
 
     mapboxMap.annotations.createPointAnnotationManager().then((manager) {
       _pointAnnotationManager = manager;
@@ -640,6 +918,71 @@ class _MapboxEngineState extends State<MapboxEngine> implements IMapController {
     });
 
     widget.onMapCreated(this);
+  }
+
+  /// 맵 탭 처리: 열차 레이어 hit test
+  Future<void> _handleMapTap(MapContentGestureContext context) async {
+    if (_mapboxMap == null || !_layersInitialized3D) return;
+
+    final screenPoint = context.touchPosition;
+    // 탭 주변 영역에서 열차 레이어 feature 검색
+    final screenBox = ScreenBox(
+      min: ScreenCoordinate(x: screenPoint.x - 30, y: screenPoint.y - 30),
+      max: ScreenCoordinate(x: screenPoint.x + 30, y: screenPoint.y + 30),
+    );
+
+    try {
+      final features = await _mapboxMap!.queryRenderedFeatures(
+        RenderedQueryGeometry.fromScreenBox(screenBox),
+        RenderedQueryOptions(layerIds: [_trainLayerId]),
+      );
+
+      if (features.isNotEmpty) {
+        final feature = features.first?.queriedFeature.feature;
+        if (feature != null) {
+          final props = feature['properties'];
+          if (props is Map) {
+            final trainNo = props['trainNo'];
+            if (trainNo != null && _onTrainTapped != null) {
+              _onTrainTapped!(trainNo.toString());
+              return;
+            }
+          }
+        }
+      }
+
+      // 열차 못 찾으면 역 레이어 검색
+      final stationBox = ScreenBox(
+        min: ScreenCoordinate(x: screenPoint.x - 40, y: screenPoint.y - 40),
+        max: ScreenCoordinate(x: screenPoint.x + 40, y: screenPoint.y + 40),
+      );
+      final stationFeatures = await _mapboxMap!.queryRenderedFeatures(
+        RenderedQueryGeometry.fromScreenBox(stationBox),
+        RenderedQueryOptions(layerIds: [_stationOutlineLayerId, _stationDotLayerId]),
+      );
+
+      if (stationFeatures.isNotEmpty) {
+        final feature = stationFeatures.first?.queriedFeature.feature;
+        if (feature != null) {
+          final props = feature['properties'];
+          if (props is Map) {
+            final name = props['name'];
+            if (name != null && _onStationTapped != null) {
+              _onStationTapped!(name.toString());
+              return;
+            }
+          }
+        }
+      }
+
+      // 빈 곳 탭 — 선택 해제
+      if (_isFollowing) {
+        _isFollowing = false;
+      }
+      _onMapTappedEmpty?.call();
+    } catch (e) {
+      debugPrint('[MapboxEngine] 탭 쿼리 실패: $e');
+    }
   }
 
   @override
