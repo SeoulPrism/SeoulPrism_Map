@@ -3,7 +3,6 @@ import '../models/subway_models.dart';
 import '../data/seoul_subway_data.dart';
 import '../core/api_keys.dart';
 import '../services/seoul_subway_service.dart';
-import '../services/environment_service.dart';
 import 'subway_overlay.dart';
 
 /// 지하철 실시간 정보 제어 패널 (접기/펼치기 지원)
@@ -38,8 +37,6 @@ class _SubwayControlPanelState extends State<SubwayControlPanel> {
           children: [
             _buildHeader(),
             if (!_isCollapsed) ...[
-              const Divider(height: 16, color: Colors.white10),
-              _buildWeatherInfo(),
               if (widget.controller.trainDelays.isNotEmpty) ...[
                 const Divider(height: 16, color: Colors.white10),
                 _buildDelayAlertBanner(),
@@ -110,94 +107,6 @@ class _SubwayControlPanelState extends State<SubwayControlPanel> {
         ),
       ],
     );
-  }
-
-  Widget _buildWeatherInfo() {
-    final env = widget.controller.environment;
-    if (env == null) {
-      return const Text(
-        '날씨 로딩 중...',
-        style: TextStyle(fontSize: 9, color: Colors.grey),
-      );
-    }
-
-    final timeIcon = _timeIcon(env.timeOfDay);
-    final sunriseStr = '${env.sunrise.hour.toString().padLeft(2, '0')}:${env.sunrise.minute.toString().padLeft(2, '0')}';
-    final sunsetStr = '${env.sunset.hour.toString().padLeft(2, '0')}:${env.sunset.minute.toString().padLeft(2, '0')}';
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        // 날씨 메인 라인
-        Row(
-          children: [
-            Icon(env.weatherIcon, size: 16, color: _weatherColor(env.weather)),
-            const SizedBox(width: 6),
-            Text(
-              '${env.temperature.toStringAsFixed(1)}°',
-              style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.white),
-            ),
-            const SizedBox(width: 6),
-            Text(
-              env.weatherDescription,
-              style: TextStyle(fontSize: 10, color: _weatherColor(env.weather)),
-            ),
-            const Spacer(),
-            Icon(timeIcon, size: 12, color: Colors.white38),
-            const SizedBox(width: 3),
-            Text(
-              env.lightPreset.toUpperCase(),
-              style: const TextStyle(fontSize: 8, color: Colors.white38, letterSpacing: 0.5),
-            ),
-          ],
-        ),
-        const SizedBox(height: 4),
-        // 상세 라인
-        Row(
-          children: [
-            _miniInfo(Icons.wb_sunny_outlined, sunriseStr),
-            const SizedBox(width: 8),
-            _miniInfo(Icons.nights_stay_outlined, sunsetStr),
-            const SizedBox(width: 8),
-            _miniInfo(Icons.air, '${env.windSpeed.toStringAsFixed(0)}km/h'),
-            const SizedBox(width: 8),
-            _miniInfo(Icons.visibility, '${env.visibility.toStringAsFixed(0)}km'),
-          ],
-        ),
-      ],
-    );
-  }
-
-  Widget _miniInfo(IconData icon, String text) {
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Icon(icon, size: 9, color: Colors.white24),
-        const SizedBox(width: 2),
-        Text(text, style: const TextStyle(fontSize: 8, color: Colors.white38)),
-      ],
-    );
-  }
-
-  IconData _timeIcon(DayPhase tod) {
-    switch (tod) {
-      case DayPhase.dawn: return Icons.wb_twilight;
-      case DayPhase.day: return Icons.wb_sunny;
-      case DayPhase.dusk: return Icons.wb_twilight;
-      case DayPhase.night: return Icons.nights_stay;
-    }
-  }
-
-  Color _weatherColor(WeatherCondition w) {
-    switch (w) {
-      case WeatherCondition.clear: return Colors.amberAccent;
-      case WeatherCondition.cloudy: return Colors.grey;
-      case WeatherCondition.rain: return Colors.lightBlueAccent;
-      case WeatherCondition.drizzle: return Colors.lightBlue;
-      case WeatherCondition.snow: return Colors.white;
-      case WeatherCondition.fog: return Colors.blueGrey;
-      case WeatherCondition.thunderstorm: return Colors.deepPurpleAccent;
-    }
   }
 
   Widget _buildDelayAlertBanner() {

@@ -650,158 +650,136 @@ class _MapboxEngineState extends State<MapboxEngine> implements IMapController {
     return result;
   }
 
+  // ── 성능 최적화용 캐시 ──
+  // 노선 색상 문자열 캐시 (매 프레임 재계산 방지)
+  final Map<String, String> _colorStrCache = {};
+  final Map<String, String> _brightColorStrCache = {};
+  // 선택 열차 하이라이트 캐시
+  String? _lastSelectedHighlightTrainNo;
+  // 선택 역 하이라이트 캐시
+  String? _lastSelectedStationHighlight;
+  String? _cachedStationHighlightJson;
+  // 지연 표시 캐시
+  int _lastDelayUpdateFrame = 0;
+  static const _delayUpdateInterval = 10; // 10프레임(~160ms)마다 지연 표시 갱신
+  int _frameCounter = 0;
+
+  String _getCachedColorStr(String subwayId) {
+    return _colorStrCache.putIfAbsent(subwayId, () {
+      return _colorToRgba(SubwayColors.getColor(subwayId));
+    });
+  }
+
+  String _getCachedBrightColorStr(String subwayId) {
+    return _brightColorStrCache.putIfAbsent(subwayId, () {
+      return _colorToRgba(_brightenColor(SubwayColors.getColor(subwayId), 0.3));
+    });
+  }
+
   @override
   Future<void> updateTrainPositions3D(List<InterpolatedTrainPosition> trains, {Map<String, int> trainDelays = const {}}) async {
     if (_mapboxMap == null || !_layersInitialized3D) return;
+    _frameCounter++;
 
-    // 열차 높이 (미터)
+    // ── 메인 열차 GeoJSON: StringBuffer로 직접 빌드 (jsonEncode + Map 할당 제거) ──
     const trainHeight = 20.0;
+    final sb = StringBuffer('{"type":"FeatureCollection","features":[');
+    bool first = true;
 
-    final features = trains.map((train) {
-      final color = SubwayColors.getColor(train.subwayId);
+    for (final train in trains) {
+      if (!first) sb.write(',');
+      first = false;
+
       final isSelected = train.trainNo == _selectedTrainNo;
       final delayMin = trainDelays[train.trainNo] ?? 0;
       final isDelayed = delayMin >= 2;
 
-      // 지연 열차: 빨간색 계열, 선택 열차: 밝은 색
       final String colorStr;
       if (isSelected) {
-        colorStr = _colorToRgba(_brightenColor(color, 0.3));
+        colorStr = _getCachedBrightColorStr(train.subwayId);
       } else if (isDelayed) {
-        // 지연 심각도에 따라 원래 색에 빨간 톤 혼합
-        final blend = (delayMin / 15.0).clamp(0.0, 1.0); // 15분 이상이면 완전 빨강
+        final color = SubwayColors.getColor(train.subwayId);
+        final blend = (delayMin / 15.0).clamp(0.0, 1.0);
         final r = (color.r + (1.0 - color.r) * blend).clamp(0.0, 1.0);
         final g = (color.g * (1.0 - blend * 0.7)).clamp(0.0, 1.0);
         final b = (color.b * (1.0 - blend * 0.7)).clamp(0.0, 1.0);
         colorStr = 'rgba(${(r*255).round()},${(g*255).round()},${(b*255).round()},1)';
       } else {
-        colorStr = _colorToRgba(color);
+        colorStr = _getCachedColorStr(train.subwayId);
       }
+
       final height = isSelected ? trainHeight + 10 : trainHeight;
       final isExpress = train.expressType == 1;
-      final polygon = _trainPolygon(
-        train.lat, train.lng, train.bearing, isExpress, train.direction,
-      );
 
-      return {
-        'type': 'Feature',
-        'geometry': {
-          'type': 'Polygon',
-          'coordinates': [polygon],
-        },
-        'properties': {
-          'color': colorStr,
-          'base': train.altitude,
-          'top': train.altitude + height,
-          'trainNo': train.trainNo,
-          'subwayId': train.subwayId,
-          'subwayName': train.subwayName,
-          'stationName': train.stationName,
-          'direction': train.direction,
-          'terminalName': train.terminalName,
-          'trainStatus': train.trainStatus,
-          'expressType': train.expressType,
-          'isLastTrain': train.isLastTrain,
-        },
-      };
-    }).toList();
+      // 폴리곤 좌표를 StringBuffer에 직접 기록 (List 할당 제거)
+      _writeTrainFeature(sb, train, colorStr, height, isExpress);
+    }
 
-    final geojson = jsonEncode({
-      'type': 'FeatureCollection',
-      'features': features,
-    });
+    sb.write(']}');
+    await _updateSourceData(_trainSourceId, sb.toString());
 
-    await _updateSourceData(_trainSourceId, geojson);
-
-    // 선택된 열차 하이라이트 (발광 링 + 펄스)
+    // ── 선택 열차 하이라이트: 선택 변경 시 + 매 프레임 좌표 업데이트 ──
     if (_selectedTrainNo != null) {
-      final selectedFeatures = <Map<String, dynamic>>[];
       for (final train in trains) {
         if (train.trainNo == _selectedTrainNo) {
-          final color = SubwayColors.getColor(train.subwayId);
-          final colorStr = _colorToRgba(color);
-
-          // 펄스 애니메이션 (1500ms 주기, 삼각파)
+          final colorStr = _getCachedColorStr(train.subwayId);
+          // 펄스 (1500ms 삼각파)
           final p = (DateTime.now().millisecondsSinceEpoch % 1500) / 1500.0 * 2.0;
-          final pulse = p < 1.0 ? p : 2.0 - p; // 0→1→0
-          final outerOpacity = 0.15 + pulse * 0.35; // 0.15 ~ 0.50
-          final innerOpacity = 0.05 + pulse * 0.15; // 0.05 ~ 0.20
+          final pulse = p < 1.0 ? p : 2.0 - p;
+          final oOp = (0.15 + pulse * 0.35);
+          final iOp = (0.05 + pulse * 0.15);
 
-          selectedFeatures.add({
-            'type': 'Feature',
-            'geometry': {
-              'type': 'Point',
-              'coordinates': [train.lng, train.lat],
-            },
-            'properties': {
-              'color': colorStr,
-              'opacity': outerOpacity,
-              'innerOpacity': innerOpacity,
-            },
-          });
+          await _updateSourceData(_selectedTrainSourceId,
+            '{"type":"FeatureCollection","features":[{"type":"Feature",'
+            '"geometry":{"type":"Point","coordinates":[${train.lng},${train.lat}]},'
+            '"properties":{"color":"$colorStr","opacity":$oOp,"innerOpacity":$iOp}}]}');
           break;
         }
       }
-      await _updateSourceData(_selectedTrainSourceId, jsonEncode({
-        'type': 'FeatureCollection',
-        'features': selectedFeatures,
-      }));
-    } else {
+    } else if (_lastSelectedHighlightTrainNo != null) {
       await _updateSourceData(_selectedTrainSourceId,
         '{"type":"FeatureCollection","features":[]}');
     }
+    _lastSelectedHighlightTrainNo = _selectedTrainNo;
 
-    // 열차별 지연 표시 (빨간 발광 링 + "N분" 라벨)
-    if (trainDelays.isNotEmpty) {
-      final delayFeatures = <Map<String, dynamic>>[];
-      // 2초 주기 펄스
+    // ── 지연 표시: N프레임마다만 갱신 (매 프레임 불필요) ──
+    if (trainDelays.isNotEmpty &&
+        _frameCounter - _lastDelayUpdateFrame >= _delayUpdateInterval) {
+      _lastDelayUpdateFrame = _frameCounter;
+      final dSb = StringBuffer('{"type":"FeatureCollection","features":[');
+      bool dFirst = true;
       final p = (DateTime.now().millisecondsSinceEpoch % 2000) / 2000.0 * 2.0;
       final pulse = p < 1.0 ? p : 2.0 - p;
+      final opacity = 0.2 + pulse * 0.4;
 
       for (final train in trains) {
         final delayMin = trainDelays[train.trainNo];
         if (delayMin == null || delayMin < 2) continue;
+        if (!dFirst) dSb.write(',');
+        dFirst = false;
 
-        // 지연 심각도에 따른 색상
-        final String delayColor;
-        if (delayMin >= 10) {
-          delayColor = 'rgba(220,30,30,1)';
-        } else if (delayMin >= 5) {
-          delayColor = 'rgba(255,60,60,1)';
-        } else {
-          delayColor = 'rgba(255,160,40,1)';
-        }
+        final delayColor = delayMin >= 10 ? 'rgba(220,30,30,1)'
+            : delayMin >= 5 ? 'rgba(255,60,60,1)' : 'rgba(255,160,40,1)';
 
-        final opacity = 0.2 + pulse * 0.4;
-
-        delayFeatures.add({
-          'type': 'Feature',
-          'geometry': {
-            'type': 'Point',
-            'coordinates': [train.lng, train.lat],
-          },
-          'properties': {
-            'color': delayColor,
-            'opacity': opacity,
-            'label': '$delayMin분 지연',
-          },
-        });
+        dSb.write('{"type":"Feature","geometry":{"type":"Point",'
+            '"coordinates":[${train.lng},${train.lat}]},'
+            '"properties":{"color":"$delayColor","opacity":$opacity,'
+            '"label":"$delayMin분 지연"}}');
       }
-
-      await _updateSourceData(_delaySourceId, jsonEncode({
-        'type': 'FeatureCollection',
-        'features': delayFeatures,
-      }));
-    } else {
+      dSb.write(']}');
+      await _updateSourceData(_delaySourceId, dSb.toString());
+    } else if (trainDelays.isEmpty && _lastDelayUpdateFrame > 0) {
+      _lastDelayUpdateFrame = 0;
       await _updateSourceData(_delaySourceId,
         '{"type":"FeatureCollection","features":[]}');
     }
 
-    // 선택된 역 하이라이트 (발광 링 + 펄스)
-    if (_selectedStationName != null) {
+    // ── 선택 역 하이라이트: 역 변경 시에만 갱신 (매 프레임 X) ──
+    if (_selectedStationName != null &&
+        _selectedStationName != _lastSelectedStationHighlight) {
+      _lastSelectedStationHighlight = _selectedStationName;
       final station = SeoulSubwayData.findStation(_selectedStationName!);
       if (station != null) {
-        // 역이 속한 첫 번째 노선 색상
         Color stationColor = Colors.blueAccent;
         for (final entry in SeoulSubwayData.lineIdToApiName.entries) {
           final stations = SeoulSubwayData.getLineStations(entry.key);
@@ -811,27 +789,59 @@ class _MapboxEngineState extends State<MapboxEngine> implements IMapController {
           }
         }
         final colorStr = _colorToRgba(stationColor);
-
-        final p = (DateTime.now().millisecondsSinceEpoch % 2000) / 2000.0 * 2.0;
-        final pulse = p < 1.0 ? p : 2.0 - p;
-        final opacity = 0.2 + pulse * 0.4;
-
-        await _updateSourceData(_selectedStationSourceId, jsonEncode({
-          'type': 'FeatureCollection',
-          'features': [{
-            'type': 'Feature',
-            'geometry': {
-              'type': 'Point',
-              'coordinates': [station.lng, station.lat],
-            },
-            'properties': {
-              'color': colorStr,
-              'opacity': opacity,
-            },
-          }],
-        }));
+        _cachedStationHighlightJson =
+          '{"type":"FeatureCollection","features":[{"type":"Feature",'
+          '"geometry":{"type":"Point","coordinates":[${station.lng},${station.lat}]},'
+          '"properties":{"color":"$colorStr","opacity":0.45}}]}';
+        await _updateSourceData(_selectedStationSourceId, _cachedStationHighlightJson!);
       }
+    } else if (_selectedStationName == null &&
+        _lastSelectedStationHighlight != null) {
+      _lastSelectedStationHighlight = null;
+      _cachedStationHighlightJson = null;
+      await _updateSourceData(_selectedStationSourceId,
+        '{"type":"FeatureCollection","features":[]}');
     }
+  }
+
+  /// 열차 Feature를 StringBuffer에 직접 기록 (Map/List 할당 없이)
+  void _writeTrainFeature(
+    StringBuffer sb,
+    InterpolatedTrainPosition train,
+    String colorStr,
+    double height,
+    bool isExpress,
+  ) {
+    // 폴리곤 좌표 계산 (인라인)
+    final offset = _offsetPosition(train.lat, train.lng, train.bearing, train.direction);
+    final oLat = offset[0];
+    final oLng = offset[1];
+
+    final lengthM = isExpress ? 60.0 : 45.0;
+    final widthM = isExpress ? 25.0 : 20.0;
+    final halfL = lengthM / 2;
+    final halfW = widthM / 2;
+
+    final rad = train.bearing * 3.14159265 / 180.0;
+    final cosB = cos(rad);
+    final sinB = sin(rad);
+
+    // 4 vertices + close (직접 좌표 계산, List 할당 없음)
+    final x0 = oLng + (-halfW * cosB + (-halfL) * sinB) / _mPerDegLng;
+    final y0 = oLat + (-(-halfW) * sinB + (-halfL) * cosB) / _mPerDegLat;
+    final x1 = oLng + (halfW * cosB + (-halfL) * sinB) / _mPerDegLng;
+    final y1 = oLat + (-(halfW) * sinB + (-halfL) * cosB) / _mPerDegLat;
+    final x2 = oLng + (halfW * cosB + halfL * sinB) / _mPerDegLng;
+    final y2 = oLat + (-(halfW) * sinB + halfL * cosB) / _mPerDegLat;
+    final x3 = oLng + (-halfW * cosB + halfL * sinB) / _mPerDegLng;
+    final y3 = oLat + (-(-halfW) * sinB + halfL * cosB) / _mPerDegLat;
+
+    // 최소한의 properties만 포함 (렌더링: color/base/top, 클릭: trainNo)
+    sb.write('{"type":"Feature","geometry":{"type":"Polygon","coordinates":'
+        '[[[$x0,$y0],[$x1,$y1],[$x2,$y2],[$x3,$y3],[$x0,$y0]]]},'
+        '"properties":{"color":"$colorStr",'
+        '"base":${train.altitude},"top":${train.altitude + height},'
+        '"trainNo":"${train.trainNo}"}}');
   }
 
   @override
@@ -1015,6 +1025,13 @@ class _MapboxEngineState extends State<MapboxEngine> implements IMapController {
 
   void _onMapCreated(MapboxMap mapboxMap) {
     _mapboxMap = mapboxMap;
+
+    // 나침반을 우하단으로 이동 (탭바 위)
+    mapboxMap.compass.updateSettings(CompassSettings(
+      position: OrnamentPosition.BOTTOM_RIGHT,
+      marginBottom: 80,
+      marginRight: 12,
+    ));
 
     // 맵 탭 리스너 — 열차 클릭 감지
     mapboxMap.setOnMapTapListener((mapContentGestureContext) {

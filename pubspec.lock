@@ -89,6 +89,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "1.0.9"
+  cupertino_native_better:
+    dependency: "direct main"
+    description:
+      name: cupertino_native_better
+      sha256: a15046cfeea72de3c6bfcc29185abb12daa9ac9c46f08b4c875e21edb237d1cd
+      url: "https://pub.dev"
+    source: hosted
+    version: "1.4.2"
   dart_sort_queue:
     dependency: transitive
     description:

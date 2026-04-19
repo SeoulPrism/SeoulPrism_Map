@@ -19,6 +19,7 @@ dependencies:
   
   # Utilities
   http: ^1.2.0
+  cupertino_native_better: ^1.4.2
 
 dev_dependencies:
   flutter_test:

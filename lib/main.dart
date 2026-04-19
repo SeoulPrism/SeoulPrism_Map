@@ -1,5 +1,6 @@
-import 'dart:math';
+import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:cupertino_native_better/cupertino_native_better.dart';
 import 'package:flutter_naver_map/flutter_naver_map.dart';
 import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart';
 import 'core/map_interface.dart';
@@ -9,6 +10,7 @@ import 'map_engines/google_map_engine.dart';
 import 'map_engines/naver_map_engine.dart';
 import 'models/subway_models.dart';
 import 'widgets/subway_overlay.dart';
+import 'widgets/weather_widget.dart';
 import 'widgets/subway_panel.dart';
 
 void main() async {
@@ -16,6 +18,7 @@ void main() async {
 
   MapboxOptions.setAccessToken(ApiKeys.mapboxAccessToken);
   MapboxMapsOptions.setLanguage('ko');
+
 
   await NaverMapSdk.instance.initialize(
     clientId: ApiKeys.naverClientId,
@@ -51,23 +54,14 @@ class DashboardScreen extends StatefulWidget {
 class _DashboardScreenState extends State<DashboardScreen> {
   MapType _currentMapType = MapType.mapbox;
   IMapController? _mapController;
+  bool _showSettings = false;
 
-  double _pitch = 45.0;
-  double _zoom = 13.0;
-  bool _isTerrainEnabled = false;
-  String _lightPreset = 'auto'; // auto = 환경 서비스에 의해 자동 결정
-
-  CameraInfo _cameraInfo = CameraInfo(
+  final CameraInfo _cameraInfo = CameraInfo(
     lat: 37.5665, lng: 126.9780, zoom: 13.0, pitch: 45.0, bearing: 0.0,
   );
 
   // 지하철 오버레이 컨트롤러
   final SubwayOverlayController _subwayController = SubwayOverlayController();
-
-  // 도착정보 팝업 상태 (기존 버튼 방식용)
-  String? _selectedStation;
-  List<ArrivalInfo> _selectedStationArrivals = [];
-  bool _showArrivalPanel = false;
 
   // 선택된 열차 정보
   InterpolatedTrainPosition? _selectedTrain;
@@ -143,129 +137,93 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
   }
 
-  // 랜덤 마커 스트레스 테스트
-  void _stressTestMarkers() {
-    if (_mapController == null) return;
-    _mapController!.clearMarkers();
-    final random = Random();
-    for (int i = 0; i < 50; i++) {
-      double lat = 37.5665 + (random.nextDouble() - 0.5) * 0.02;
-      double lng = 126.9780 + (random.nextDouble() - 0.5) * 0.02;
-      _mapController!.addMarker('marker_$i', lat, lng, title: 'POI $i');
-    }
-  }
-
-  // 역 도착정보 조회
-  Future<void> _showStationArrival(String stationName) async {
-    setState(() {
-      _selectedStation = stationName;
-      _showArrivalPanel = true;
-      _selectedStationArrivals = [];
-    });
-
-    final arrivals = await _subwayController.getStationArrivals(stationName);
-    if (mounted) {
-      setState(() {
-        _selectedStationArrivals = arrivals;
-      });
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: Stack(
-        children: [
-          // 지도 엔진
-          Positioned.fill(key: ValueKey(_currentMapType), child: _buildActiveMapEngine()),
-
-          // 디버그 패널 — 개발 중 비활성화
-          // Positioned(top: 60, right: 20, child: _buildDebugPanel()),
-
-          // 지하철 컨트롤 패널 (드래그 가능, 상단 좌측)
-          Positioned(
-            left: _subwayPanelOffset.dx,
-            top: _subwayPanelOffset.dy,
-            child: GestureDetector(
-              onPanUpdate: (details) {
-                setState(() {
-                  final size = MediaQuery.of(context).size;
-                  final dx = (_subwayPanelOffset.dx + details.delta.dx).clamp(0.0, size.width - 60);
-                  final dy = (_subwayPanelOffset.dy + details.delta.dy).clamp(0.0, size.height - 60);
-                  _subwayPanelOffset = Offset(dx, dy);
-                });
-              },
-              child: SubwayControlPanel(
-                controller: _subwayController,
-                onRefresh: () => setState(() {}),
-              ),
-            ),
-          ),
-
-          // 슬라이딩 컨트롤 패널 (하단)
-          _buildSlidingControlPanel(),
-
-          // 역 도착정보 패널 (중앙)
-          if (_showArrivalPanel && _selectedStation != null)
-            Positioned(
-              top: 120,
-              left: 0,
-              right: 0,
-              child: Center(
-                child: StationArrivalPanel(
-                  stationName: _selectedStation!,
-                  arrivals: _selectedStationArrivals,
-                  onClose: () => setState(() => _showArrivalPanel = false),
-                ),
-              ),
-            ),
-
-          // 열차 상세 패널 (바텀 슬라이드 애니메이션)
-          if (_lastSelectedTrain != null)
-            AnimatedPositioned(
-              duration: const Duration(milliseconds: 350),
-              curve: _selectedTrain != null ? Curves.easeOutCubic : Curves.easeInCubic,
-              bottom: _selectedTrain != null ? 70 : -280,
-              left: 0,
-              right: 0,
-              child: AnimatedOpacity(
-                duration: const Duration(milliseconds: 300),
-                opacity: _selectedTrain != null ? 1.0 : 0.0,
-                child: TrainDetailPanel(
-                  train: (_selectedTrain ?? _lastSelectedTrain)!,
-                  delayMinutes: _subwayController.trainDelays[(_selectedTrain ?? _lastSelectedTrain)!.trainNo] ?? 0,
-                  onClose: () {
-                    _subwayController.deselectTrain();
-                  },
-                ),
-              ),
-            ),
-
-          // 역 상세 패널 (바텀 슬라이드 애니메이션)
-          if (_lastSelectedMapStation != null)
-            AnimatedPositioned(
-              duration: const Duration(milliseconds: 350),
-              curve: _selectedMapStation != null ? Curves.easeOutCubic : Curves.easeInCubic,
-              bottom: _selectedMapStation != null ? 70 : -450,
-              left: 0,
-              right: 0,
-              child: AnimatedOpacity(
-                duration: const Duration(milliseconds: 300),
-                opacity: _selectedMapStation != null ? 1.0 : 0.0,
-                child: StationDetailPanel(
-                  stationName: (_selectedMapStation ?? _lastSelectedMapStation)!,
-                  stationInfo: _selectedMapStation != null ? _selectedMapStationInfo : _lastSelectedMapStationInfo,
-                  arrivals: _selectedMapStation != null ? _selectedMapStationArrivals : _lastMapStationArrivals,
-                  isLoading: _mapStationLoading,
-                  onClose: () {
-                    _subwayController.deselectStation();
-                  },
-                ),
-              ),
-            ),
-        ],
-      ),
+      extendBody: true,
       bottomNavigationBar: _buildBottomTabBar(),
+      body: _showSettings
+          ? SettingsPage(
+              subwayController: _subwayController,
+              mapController: _mapController,
+            )
+          : Stack(
+              children: [
+                // 지도 엔진
+                Positioned.fill(key: ValueKey(_currentMapType), child: _buildActiveMapEngine()),
+
+                // 날씨/시간 위젯 (우상단)
+                Positioned(
+                  top: MediaQuery.of(context).padding.top + 8,
+                  right: 12,
+                  child: WeatherTimeWidget(environment: _subwayController.environment),
+                ),
+
+                // 지하철 컨트롤 패널 (드래그 가능, 상단 좌측)
+                Positioned(
+                  left: _subwayPanelOffset.dx,
+                  top: _subwayPanelOffset.dy,
+                  child: GestureDetector(
+                    onPanUpdate: (details) {
+                      setState(() {
+                        final size = MediaQuery.of(context).size;
+                        final dx = (_subwayPanelOffset.dx + details.delta.dx).clamp(0.0, size.width - 60);
+                        final dy = (_subwayPanelOffset.dy + details.delta.dy).clamp(0.0, size.height - 60);
+                        _subwayPanelOffset = Offset(dx, dy);
+                      });
+                    },
+                    child: SubwayControlPanel(
+                      controller: _subwayController,
+                      onRefresh: () => setState(() {}),
+                    ),
+                  ),
+                ),
+
+                // 열차 상세 패널 (바텀 슬라이드 애니메이션)
+                if (_lastSelectedTrain != null)
+                  AnimatedPositioned(
+                    duration: const Duration(milliseconds: 350),
+                    curve: _selectedTrain != null ? Curves.easeOutCubic : Curves.easeInCubic,
+                    bottom: _selectedTrain != null ? 70 : -280,
+                    left: 0,
+                    right: 0,
+                    child: AnimatedOpacity(
+                      duration: const Duration(milliseconds: 300),
+                      opacity: _selectedTrain != null ? 1.0 : 0.0,
+                      child: TrainDetailPanel(
+                        train: (_selectedTrain ?? _lastSelectedTrain)!,
+                        delayMinutes: _subwayController.trainDelays[(_selectedTrain ?? _lastSelectedTrain)!.trainNo] ?? 0,
+                        onClose: () {
+                          _subwayController.deselectTrain();
+                        },
+                      ),
+                    ),
+                  ),
+
+                // 역 상세 패널 (바텀 슬라이드 애니메이션)
+                if (_lastSelectedMapStation != null)
+                  AnimatedPositioned(
+                    duration: const Duration(milliseconds: 350),
+                    curve: _selectedMapStation != null ? Curves.easeOutCubic : Curves.easeInCubic,
+                    bottom: _selectedMapStation != null ? 70 : -450,
+                    left: 0,
+                    right: 0,
+                    child: AnimatedOpacity(
+                      duration: const Duration(milliseconds: 300),
+                      opacity: _selectedMapStation != null ? 1.0 : 0.0,
+                      child: StationDetailPanel(
+                        stationName: (_selectedMapStation ?? _lastSelectedMapStation)!,
+                        stationInfo: _selectedMapStation != null ? _selectedMapStationInfo : _lastSelectedMapStationInfo,
+                        arrivals: _selectedMapStation != null ? _selectedMapStationArrivals : _lastMapStationArrivals,
+                        isLoading: _mapStationLoading,
+                        onClose: () {
+                          _subwayController.deselectStation();
+                        },
+                      ),
+                    ),
+                  ),
+              ],
+            ),
     );
   }
 
@@ -280,175 +238,168 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
   }
 
-  // ── 하단 탭바 (맵 엔진 전환) ──
+  // ── 하단 탭바 (리퀴드 글라스) ──
   Widget _buildBottomTabBar() {
-    return BottomNavigationBar(
-      currentIndex: _currentMapType.index,
-      onTap: (index) => _switchMapType(MapType.values[index]),
-      backgroundColor: Colors.black,
-      selectedItemColor: Colors.blueAccent,
-      unselectedItemColor: Colors.white24,
-      type: BottomNavigationBarType.fixed,
-      items: const [
-        BottomNavigationBarItem(icon: Icon(Icons.layers), label: 'Mapbox'),
-        BottomNavigationBarItem(icon: Icon(Icons.language), label: 'Google'),
-        BottomNavigationBarItem(icon: Icon(Icons.map), label: 'Naver'),
-      ],
-    );
-  }
-
-  // ── 슬라이딩 컨트롤 패널 ──
-  Widget _buildSlidingControlPanel() {
-    return DraggableScrollableSheet(
-      initialChildSize: 0.06,
-      minChildSize: 0.06,
-      maxChildSize: 0.35,
-      snap: true,
-      snapSizes: const [0.06, 0.35],
-      builder: (context, scrollController) {
-        return Container(
-          decoration: BoxDecoration(
-            color: Colors.black.withValues(alpha: 0.9),
-            borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
-          ),
-          child: ListView(
-            controller: scrollController,
-            padding: EdgeInsets.zero,
-            children: [
-              // 드래그 핸들
-              Center(
-                child: Container(
-                  width: 40,
-                  height: 4,
-                  margin: const EdgeInsets.symmetric(vertical: 10),
-                  decoration: BoxDecoration(
-                    color: Colors.white24,
-                    borderRadius: BorderRadius.circular(2),
-                  ),
-                ),
-              ),
-              // 컨트롤 내용
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 20),
-                child: _buildControlPanelContent(),
-              ),
-            ],
-          ),
-        );
+    final tabIndex = _showSettings ? 3 : _currentMapType.index;
+    return CNTabBar(
+      currentIndex: tabIndex,
+      onTap: (index) {
+        if (index < MapType.values.length) {
+          setState(() => _showSettings = false);
+          _switchMapType(MapType.values[index]);
+        } else {
+          setState(() {
+            _showSettings = !_showSettings;
+            if (_showSettings && _subwayController.isActive) {
+              _subwayController.stop();
+            }
+          });
+        }
       },
-    );
-  }
-
-  Widget _buildControlPanelContent() {
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Row(
-          children: [
-            _actionChip('STRESS TEST', Icons.bolt, _stressTestMarkers),
-            const SizedBox(width: 8),
-            _actionChip('CLEAR', Icons.delete_outline, () => _mapController?.clearMarkers()),
-            const Spacer(),
-            DropdownButton<String>(
-              value: _lightPreset,
-              items: ['auto', 'day', 'night', 'dawn', 'dusk']
-                  .map((e) => DropdownMenuItem(
-                      value: e,
-                      child: Text(e.toUpperCase(), style: TextStyle(
-                        fontSize: 10,
-                        color: e == 'auto' ? Colors.greenAccent : null,
-                      ))))
-                  .toList(),
-              onChanged: (v) {
-                if (v != null) {
-                  setState(() => _lightPreset = v);
-                  _subwayController.autoLighting = (v == 'auto');
-                  if (v == 'auto') {
-                    // 환경 서비스가 다시 제어 — 즉시 적용
-                    final env = _subwayController.environment;
-                    if (env != null) {
-                      _mapController?.applyWeatherEffect(lightPreset: env.lightPreset);
-                    }
-                  } else {
-                    _mapController?.setLightPreset(v);
-                  }
-                }
-              },
-            ),
-          ],
-        ),
-        const Divider(height: 20, color: Colors.white10),
-        _sliderRow('PITCH', _pitch, 0, 75, (v) {
-          setState(() => _pitch = v);
-          _mapController?.setPitch(v);
-        }),
-        _sliderRow('ZOOM', _zoom, 8, 20, (v) {
-          setState(() => _zoom = v);
-          _mapController?.setZoom(v);
-        }),
-        const SizedBox(height: 10),
-        SingleChildScrollView(
-          scrollDirection: Axis.horizontal,
-          child: Row(
-            children: [
-              _quickActionBtn('CITY HALL', 37.5665, 126.9780),
-              _quickActionBtn('GANGNAM', 37.4979, 127.0276),
-              _quickActionBtn('HONGDAE', 37.5567, 126.9236),
-              const SizedBox(width: 8),
-              _stationBtn('서울역'),
-              _stationBtn('강남'),
-              _stationBtn('홍대입구'),
-              _stationBtn('잠실'),
-            ],
-          ),
-        ),
+      items: const [
+        CNTabBarItem(label: 'Mapbox', customIcon: Icons.layers),
+        CNTabBarItem(label: 'Google', customIcon: Icons.language),
+        CNTabBarItem(label: 'Naver', customIcon: Icons.map),
+        CNTabBarItem(label: '설정', customIcon: Icons.settings),
       ],
     );
   }
+}
 
-  // ── 디버그 패널 ──
-  Widget _buildDebugPanel() {
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// 설정 페이지
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+class SettingsPage extends StatefulWidget {
+  final SubwayOverlayController subwayController;
+  final IMapController? mapController;
+
+  const SettingsPage({
+    super.key,
+    required this.subwayController,
+    this.mapController,
+  });
+
+  @override
+  State<SettingsPage> createState() => _SettingsPageState();
+}
+
+class _SettingsPageState extends State<SettingsPage> {
+  String _lightPreset = 'auto';
+
+  @override
+  Widget build(BuildContext context) {
+    final topPadding = MediaQuery.of(context).padding.top;
+    final bottomPadding = MediaQuery.of(context).padding.bottom;
+    return Container(
+      color: const Color(0xFF0a0a1a),
+      child: ListView(
+        padding: EdgeInsets.fromLTRB(16, topPadding + 16, 16, bottomPadding + 80),
+        children: [
+          const Text('설정', style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Colors.white)),
+          const SizedBox(height: 16),
+          _sectionHeader('성능'),
+          _buildPerformanceSection(),
+          const SizedBox(height: 24),
+          _sectionHeader('라이팅'),
+          _buildLightingSection(),
+          const SizedBox(height: 24),
+          _sectionHeader('정보'),
+          _buildInfoSection(),
+        ],
+      ),
+    );
+  }
+
+  Widget _sectionHeader(String title) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Text(
+        title,
+        style: const TextStyle(
+          fontSize: 13,
+          fontWeight: FontWeight.bold,
+          color: Colors.blueAccent,
+          letterSpacing: 1.0,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPerformanceSection() {
+    final isAndroid = Platform.isAndroid;
     return Card(
-      color: Colors.black.withValues(alpha: 0.7),
-      child: Container(
-        padding: const EdgeInsets.all(12.0),
-        width: 180,
+      color: const Color(0xFF1a1a2e),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      child: Column(
+        children: [
+          _settingTile(
+            icon: Icons.speed,
+            title: '렌더링 백엔드',
+            subtitle: isAndroid
+                ? 'OpenGL ES (Mapbox SDK 기본값)'
+                : 'Metal (자동)',
+            trailing: Icon(
+              isAndroid ? Icons.auto_awesome : Icons.check_circle,
+              size: 18,
+              color: Colors.white38,
+            ),
+          ),
+          const Divider(height: 1, color: Colors.white10),
+          _settingTile(
+            icon: Icons.animation,
+            title: '애니메이션 프레임 레이트',
+            subtitle: '60fps (자동 적응형)',
+            trailing: const Icon(Icons.check_circle, size: 18, color: Colors.greenAccent),
+          ),
+          const Divider(height: 1, color: Colors.white10),
+          _settingTile(
+            icon: Icons.memory,
+            title: '렌더링 최적화',
+            subtitle: 'StringBuffer GeoJSON, 동시실행 방지, 캐싱',
+            trailing: const Icon(Icons.check_circle, size: 18, color: Colors.greenAccent),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildLightingSection() {
+    return Card(
+      color: const Color(0xFF1a1a2e),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
           children: [
-            Text(_currentMapType.name.toUpperCase(),
-                style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.blueAccent)),
-            const Divider(height: 15, color: Colors.white10),
-            _debugRow('LAT', _cameraInfo.lat.toStringAsFixed(4)),
-            _debugRow('LNG', _cameraInfo.lng.toStringAsFixed(4)),
-            _debugRow('ZOOM', _zoom.toStringAsFixed(1)),
-            const Divider(height: 15, color: Colors.white10),
-
-            if (_subwayController.isActive) ...[
-              _debugRow('TRAINS', '${_subwayController.currentTrains.length}'),
-              _debugRow('API', '${_subwayController.totalTrainCount}'),
-              if (_subwayController.lastError != null)
-                Text('ERR: ${_subwayController.lastError}',
-                    style: const TextStyle(fontSize: 7, color: Colors.redAccent),
-                    maxLines: 1, overflow: TextOverflow.ellipsis),
-              const Divider(height: 15, color: Colors.white10),
-            ],
-
-            const Text('ENGINE FEATURES', style: TextStyle(fontSize: 8, color: Colors.grey)),
-            const SizedBox(height: 5),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                const Text('3D Terrain', style: TextStyle(fontSize: 10)),
-                Switch.adaptive(
-                  value: _isTerrainEnabled,
-                  onChanged: (v) {
-                    setState(() => _isTerrainEnabled = v);
-                    _mapController?.setTerrain(v);
+            const Text('라이트 프리셋', style: TextStyle(fontSize: 12, color: Colors.white70)),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              children: ['auto', 'day', 'night', 'dawn', 'dusk'].map((preset) {
+                final isSelected = _lightPreset == preset;
+                return ChoiceChip(
+                  label: Text(preset.toUpperCase(), style: TextStyle(
+                    fontSize: 10,
+                    color: isSelected ? Colors.white : Colors.white54,
+                  )),
+                  selected: isSelected,
+                  selectedColor: Colors.blueAccent,
+                  backgroundColor: Colors.white10,
+                  onSelected: (_) {
+                    setState(() => _lightPreset = preset);
+                    widget.subwayController.autoLighting = (preset == 'auto');
+                    if (preset == 'auto') {
+                      final env = widget.subwayController.environment;
+                      if (env != null) {
+                        widget.mapController?.applyWeatherEffect(lightPreset: env.lightPreset);
+                      }
+                    } else {
+                      widget.mapController?.setLightPreset(preset);
+                    }
                   },
-                ),
-              ],
+                );
+              }).toList(),
             ),
           ],
         ),
@@ -456,55 +407,42 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  Widget _debugRow(String l, String v) => Padding(
-    padding: const EdgeInsets.symmetric(vertical: 2.0),
-    child: Row(
-      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-      children: [
-        Text(l, style: const TextStyle(fontSize: 10, color: Colors.grey)),
-        Text(v, style: const TextStyle(fontSize: 10)),
-      ],
-    ),
-  );
-
-  Widget _actionChip(String l, IconData i, VoidCallback onTap) => ActionChip(
-    avatar: Icon(i, size: 14),
-    label: Text(l, style: const TextStyle(fontSize: 9)),
-    onPressed: onTap,
-    backgroundColor: Colors.blueGrey[900],
-  );
-
-  Widget _sliderRow(String l, double v, double min, double max, Function(double) f) =>
-      Row(children: [
-        SizedBox(width: 40, child: Text(l, style: const TextStyle(fontSize: 9))),
-        Expanded(child: Slider(value: v, min: min, max: max, onChanged: f)),
-        Text('${v.toInt()}', style: const TextStyle(fontSize: 9)),
-      ]);
-
-  Widget _quickActionBtn(String l, double lat, double lng) => Padding(
-    padding: const EdgeInsets.only(right: 8.0),
-    child: OutlinedButton(
-      onPressed: () {
-        setState(() {
-          _cameraInfo = CameraInfo(lat: lat, lng: lng, zoom: _zoom, pitch: _pitch, bearing: 0.0);
-        });
-        _mapController?.moveTo(lat, lng, zoom: _zoom, pitch: _pitch);
-      },
-      child: Text(l, style: const TextStyle(fontSize: 9)),
-    ),
-  );
-
-  Widget _stationBtn(String stationName) => Padding(
-    padding: const EdgeInsets.only(right: 4.0),
-    child: OutlinedButton.icon(
-      icon: const Icon(Icons.train, size: 12),
-      label: Text(stationName, style: const TextStyle(fontSize: 9)),
-      style: OutlinedButton.styleFrom(
-        foregroundColor: Colors.greenAccent,
-        side: const BorderSide(color: Colors.greenAccent, width: 0.5),
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+  Widget _buildInfoSection() {
+    return Card(
+      color: const Color(0xFF1a1a2e),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      child: Column(
+        children: [
+          _settingTile(
+            icon: Icons.info_outline,
+            title: '맵 엔진',
+            subtitle: 'Mapbox Maps SDK v11 (mapbox_maps_flutter 2.21.0)',
+          ),
+          const Divider(height: 1, color: Colors.white10),
+          _settingTile(
+            icon: Icons.phone_android,
+            title: '플랫폼',
+            subtitle: Platform.isAndroid
+                ? 'Android (${Platform.operatingSystemVersion})'
+                : 'iOS (${Platform.operatingSystemVersion})',
+          ),
+        ],
       ),
-      onPressed: () => _showStationArrival(stationName),
-    ),
-  );
+    );
+  }
+
+  Widget _settingTile({
+    required IconData icon,
+    required String title,
+    required String subtitle,
+    Widget? trailing,
+  }) {
+    return ListTile(
+      leading: Icon(icon, size: 20, color: Colors.white54),
+      title: Text(title, style: const TextStyle(fontSize: 13)),
+      subtitle: Text(subtitle, style: const TextStyle(fontSize: 10, color: Colors.white38)),
+      trailing: trailing,
+      dense: true,
+    );
+  }
 }

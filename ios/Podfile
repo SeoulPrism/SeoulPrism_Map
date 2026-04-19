@@ -1,5 +1,5 @@
-# 전역 플랫폼 설정을 iOS 14.0으로 변경 (지도 SDK 요구사항)
-platform :ios, '14.0'
+# 전역 플랫폼 설정을 iOS 15.0으로 변경 (cupertino_native_better 요구사항)
+platform :ios, '15.0'
 
 ENV['COCOAPODS_DISABLE_STATS'] = 'true'
 
@@ -39,9 +39,9 @@ post_install do |installer|
   installer.pods_project.targets.each do |target|
     flutter_additional_ios_build_settings(target)
 
-    # 모든 Pod 타겟의 배포 버전을 14.0으로 맞춤
+    # 모든 Pod 타겟의 배포 버전을 15.0으로 맞춤
     target.build_configurations.each do |config|
-      config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '14.0'
+      config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '15.0'
     end
   end
 end
