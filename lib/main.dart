@@ -233,6 +233,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 opacity: _selectedTrain != null ? 1.0 : 0.0,
                 child: TrainDetailPanel(
                   train: (_selectedTrain ?? _lastSelectedTrain)!,
+                  delayMinutes: _subwayController.trainDelays[(_selectedTrain ?? _lastSelectedTrain)!.trainNo] ?? 0,
                   onClose: () {
                     _subwayController.deselectTrain();
                   },

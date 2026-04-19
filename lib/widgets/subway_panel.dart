@@ -40,6 +40,10 @@ class _SubwayControlPanelState extends State<SubwayControlPanel> {
             if (!_isCollapsed) ...[
               const Divider(height: 16, color: Colors.white10),
               _buildWeatherInfo(),
+              if (widget.controller.trainDelays.isNotEmpty) ...[
+                const Divider(height: 16, color: Colors.white10),
+                _buildDelayAlertBanner(),
+              ],
               const Divider(height: 16, color: Colors.white10),
               _buildStatusInfo(),
               const Divider(height: 16, color: Colors.white10),
@@ -194,6 +198,103 @@ class _SubwayControlPanelState extends State<SubwayControlPanel> {
       case WeatherCondition.fog: return Colors.blueGrey;
       case WeatherCondition.thunderstorm: return Colors.deepPurpleAccent;
     }
+  }
+
+  Widget _buildDelayAlertBanner() {
+    final delays = widget.controller.trainDelays;
+    // 지연 시간순 정렬
+    final sorted = delays.entries.toList()
+      ..sort((a, b) => b.value.compareTo(a.value));
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Container(
+              width: 6, height: 6,
+              decoration: const BoxDecoration(
+                color: Colors.redAccent,
+                shape: BoxShape.circle,
+                boxShadow: [BoxShadow(color: Colors.redAccent, blurRadius: 4)],
+              ),
+            ),
+            const SizedBox(width: 6),
+            Text(
+              '지연 열차 ${delays.length}대',
+              style: const TextStyle(
+                fontSize: 10,
+                fontWeight: FontWeight.bold,
+                color: Colors.redAccent,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 4),
+        ...sorted.take(4).map((entry) {
+          // 열차번호로 현재 열차 정보 찾기
+          final train = widget.controller.currentTrains
+              .where((t) => t.trainNo == entry.key)
+              .firstOrNull;
+          final lineColor = train != null
+              ? SubwayColors.getColor(train.subwayId)
+              : Colors.grey;
+          final lineName = train != null
+              ? (SubwayColors.lineNames[train.subwayId] ?? '')
+              : '';
+
+          return Padding(
+            padding: const EdgeInsets.only(bottom: 3),
+            child: Row(
+              children: [
+                // 노선 태그
+                if (lineName.isNotEmpty) ...[
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                    decoration: BoxDecoration(
+                      color: lineColor.withValues(alpha: 0.3),
+                      borderRadius: BorderRadius.circular(3),
+                      border: Border.all(color: lineColor, width: 0.5),
+                    ),
+                    child: Text(lineName,
+                      style: const TextStyle(fontSize: 7, color: Colors.white)),
+                  ),
+                  const SizedBox(width: 4),
+                ],
+                // 지연 시간 뱃지
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                  decoration: BoxDecoration(
+                    color: Colors.redAccent.withValues(alpha: 0.25),
+                    borderRadius: BorderRadius.circular(3),
+                    border: Border.all(color: Colors.redAccent, width: 0.5),
+                  ),
+                  child: Text('${entry.value}분',
+                    style: const TextStyle(
+                      fontSize: 8, fontWeight: FontWeight.bold,
+                      color: Colors.redAccent)),
+                ),
+                const SizedBox(width: 4),
+                // 열차번호 + 현재 역
+                Expanded(
+                  child: Text(
+                    '${entry.key}${train != null ? ' · ${train.stationName}' : ''}',
+                    style: const TextStyle(fontSize: 8, color: Colors.white70),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ],
+            ),
+          );
+        }),
+        if (sorted.length > 4)
+          Text(
+            '외 ${sorted.length - 4}대...',
+            style: const TextStyle(fontSize: 7, color: Colors.white38),
+          ),
+      ],
+    );
   }
 
   Widget _buildStatusInfo() {
@@ -533,11 +634,13 @@ class TrainInfoTooltip extends StatelessWidget {
 class TrainDetailPanel extends StatelessWidget {
   final InterpolatedTrainPosition train;
   final VoidCallback? onClose;
+  final int delayMinutes;
 
   const TrainDetailPanel({
     super.key,
     required this.train,
     this.onClose,
+    this.delayMinutes = 0,
   });
 
   @override
@@ -667,6 +770,21 @@ class TrainDetailPanel extends StatelessWidget {
                 ),
                 const SizedBox(width: 8),
                 _statusChip(train.trainStatus, lineColor),
+                if (delayMinutes >= 2) ...[
+                  const SizedBox(width: 6),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: Colors.redAccent.withOpacity(0.2),
+                      borderRadius: BorderRadius.circular(4),
+                      border: Border.all(color: Colors.redAccent.withOpacity(0.5)),
+                    ),
+                    child: Text(
+                      '$delayMinutes분 지연',
+                      style: const TextStyle(fontSize: 9, color: Colors.redAccent, fontWeight: FontWeight.bold),
+                    ),
+                  ),
+                ],
                 if (train.isLastTrain) ...[
                   const SizedBox(width: 6),
                   Container(

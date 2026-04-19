@@ -325,6 +325,144 @@ class SeoulSubwayService {
   }
 
   // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  // 6. 열차별 지연 감지 (배차간격 비교)
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  /// 개별 열차의 지연 시간(분)을 산출하여 반환
+  ///
+  /// 방법:
+  /// 1) realtimeStationArrival/ALL 일괄 조회
+  /// 2) (노선, 방향, 역) 그룹별로 열차를 barvlDt 순 정렬
+  /// 3) 연속 열차 간 간격을 시간표 배차간격과 비교
+  /// 4) 초과분이 있는 뒤쪽 열차에 지연 시간 부여
+  /// 5) 같은 열차가 여러 역에서 감지되면 최대값 채택
+  ///
+  /// 반환: { trainNo: delayMinutes } — 2분 이상 지연 열차만 포함
+  Future<Map<String, int>> fetchTrainDelays() async {
+    if (isNonOperatingHours) return {};
+
+    try {
+      _incrementCallCount();
+      final url = '$_baseUrl/$_apiKey/json/realtimeStationArrival/ALL/0/500';
+      final response = await http.get(Uri.parse(url)).timeout(
+        const Duration(seconds: 15),
+      );
+      if (response.statusCode != 200) return {};
+
+      final data = jsonDecode(response.body);
+      final list = data['realtimeArrivalList'] as List?;
+      if (list == null) return {};
+
+      final hour = DateTime.now().hour;
+      final trainDelays = <String, int>{}; // trainNo → delayMinutes
+
+      // ── Step 1: 키워드 감지 (즉각 지연 표시) ──
+      const delayKeywords = ['지연', '서행', '운행중지', '운행 중지', '장애', '사고', '고장'];
+      for (final item in list) {
+        final msg2 = item['arvlMsg2']?.toString() ?? '';
+        final msg3 = item['arvlMsg3']?.toString() ?? '';
+        if (delayKeywords.any((kw) => '$msg2 $msg3'.contains(kw))) {
+          final trainNo = item['btrainNo']?.toString() ?? '';
+          if (trainNo.isNotEmpty) {
+            trainDelays[trainNo] = trainDelays[trainNo] ?? 1; // 최소 1분
+          }
+        }
+      }
+
+      // ── Step 2: 배차간격 분석 — 개별 열차 지연 시간 산출 ──
+      // (노선+방향+역) 그룹별로 { barvlDt, trainNo } 수집
+      final grouped = <String, List<_ArrivalEntry>>{};
+      for (final item in list) {
+        final subwayId = item['subwayId']?.toString() ?? '';
+        final direction = item['updnLine']?.toString() ?? '';
+        final station = item['statnNm']?.toString() ?? '';
+        final seconds = int.tryParse(item['barvlDt']?.toString() ?? '') ?? -1;
+        final trainNo = item['btrainNo']?.toString() ?? '';
+        if (seconds < 0 || subwayId.isEmpty || trainNo.isEmpty) continue;
+
+        final key = '${subwayId}_${direction}_$station';
+        grouped.putIfAbsent(key, () => []).add(
+          _ArrivalEntry(trainNo: trainNo, seconds: seconds, subwayId: subwayId),
+        );
+      }
+
+      for (final entry in grouped.entries) {
+        final arrivals = entry.value..sort((a, b) => a.seconds.compareTo(b.seconds));
+        if (arrivals.length < 2) continue;
+
+        final subwayId = arrivals.first.subwayId;
+        final expectedSec = _getExpectedHeadwaySec(subwayId, hour);
+
+        for (int i = 1; i < arrivals.length; i++) {
+          final gap = arrivals[i].seconds - arrivals[i - 1].seconds;
+          if (gap < 30 || gap > 3600) continue;
+
+          final delaySec = gap - expectedSec;
+          if (delaySec < expectedSec * 0.5) continue;
+          final delayMin = (delaySec / 60).round();
+          if (delayMin < 2) continue;
+
+          // 뒤쪽 열차(더 늦게 오는)에 지연 부여, 최대값 채택
+          final trainNo = arrivals[i].trainNo;
+          final prev = trainDelays[trainNo] ?? 0;
+          if (delayMin > prev) {
+            trainDelays[trainNo] = delayMin;
+          }
+        }
+      }
+
+      if (trainDelays.isNotEmpty) {
+        debugPrint('[SeoulSubwayAPI] ⚠️ 열차 지연: ${trainDelays.length}대 — '
+            '${trainDelays.entries.take(5).map((e) => '${e.key}(${e.value}분)').join(', ')}'
+            '${trainDelays.length > 5 ? ' ...' : ''}');
+      }
+      return trainDelays;
+    } catch (e) {
+      debugPrint('[SeoulSubwayAPI] ❌ 지연 감지 실패: $e');
+      return {};
+    }
+  }
+
+  /// 노선 ID → 노선명 역매핑
+  static const _subwayIdToName = {
+    '1001': '1호선', '1002': '2호선', '1003': '3호선', '1004': '4호선',
+    '1005': '5호선', '1006': '6호선', '1007': '7호선', '1008': '8호선',
+    '1009': '9호선', '1063': '경의중앙선', '1065': '공항철도',
+    '1067': '경춘선', '1075': '수인분당선', '1077': '신분당선',
+    '1092': '우이신설선',
+  };
+
+  /// 시간표 기준 배차간격 (초) 반환
+  /// 시간대별: 러시아워(7~9,17~19), 평시(9~17,19~22), 심야(22~24,5~7)
+  static int _getExpectedHeadwaySec(String subwayId, int hour) {
+    final isRush = (hour >= 7 && hour < 9) || (hour >= 17 && hour < 19);
+    final isLate = hour >= 22 || (hour >= 5 && hour < 7);
+
+    // 노선별 [러시아워, 평시, 심야/조조] 배차간격(초)
+    const headways = {
+      '1001': [180, 360, 540],   // 1호선: 3/6/9분
+      '1002': [150, 270, 420],   // 2호선: 2.5/4.5/7분
+      '1003': [180, 360, 480],   // 3호선: 3/6/8분
+      '1004': [180, 330, 480],   // 4호선: 3/5.5/8분
+      '1005': [180, 360, 540],   // 5호선: 3/6/9분
+      '1006': [240, 420, 540],   // 6호선: 4/7/9분
+      '1007': [180, 360, 540],   // 7호선: 3/6/9분
+      '1008': [240, 420, 600],   // 8호선: 4/7/10분
+      '1009': [180, 360, 480],   // 9호선: 3/6/8분
+      '1063': [360, 600, 900],   // 경의중앙선: 6/10/15분
+      '1065': [360, 540, 720],   // 공항철도: 6/9/12분
+      '1067': [420, 720, 900],   // 경춘선: 7/12/15분
+      '1075': [300, 480, 600],   // 수인분당선: 5/8/10분
+      '1077': [300, 420, 540],   // 신분당선: 5/7/9분
+      '1092': [360, 480, 600],   // 우이신설선: 6/8/10분
+    };
+
+    final h = headways[subwayId] ?? [300, 480, 600]; // 기본 5/8/10분
+    if (isRush) return h[0];
+    if (isLate) return h[2];
+    return h[1]; // 평시
+  }
+
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   // WKT (Well-Known Text) 파싱 유틸리티
   // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -355,6 +493,14 @@ class SeoulSubwayService {
       return <double>[];
     }).where((c) => c.length == 2).toList();
   }
+}
+
+/// 배차간격 분석용 도착 항목
+class _ArrivalEntry {
+  final String trainNo;
+  final int seconds;
+  final String subwayId;
+  const _ArrivalEntry({required this.trainNo, required this.seconds, required this.subwayId});
 }
 
 /// Seoul API 오류 클래스

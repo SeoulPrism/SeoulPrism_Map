@@ -78,6 +78,11 @@ class SubwayOverlayController {
   List<ArrivalInfo> _selectedStationArrivals = [];
   bool _stationLoading = false;
 
+  // 열차별 지연 상태
+  Map<String, int> _trainDelays = {}; // trainNo → delayMinutes
+  Timer? _alertTimer;
+  static const int _alertFetchIntervalSec = 300; // 5분마다 지연 감지 (API 쿼터 절약)
+
   // 콜백
   VoidCallback? onStateChanged;
   void Function(String stationName, List<ArrivalInfo> arrivals)? onStationTapped;
@@ -105,6 +110,8 @@ class SubwayOverlayController {
   bool get stationLoading => _stationLoading;
   String? get selectedTrainNo => _selectedTrainNo;
   InterpolatedTrainPosition? get selectedTrainData => _selectedTrainData;
+  Map<String, int> get trainDelays => _trainDelays;
+  int get delayedTrainCount => _trainDelays.length;
 
   void attachMap(IMapController controller) {
     _mapController = controller;
@@ -284,6 +291,13 @@ class SubwayOverlayController {
       onStateChanged?.call();
     };
     _envService.start();
+
+    // 알림정보 (지연 방어막) 시작
+    _fetchAlerts();
+    _alertTimer = Timer.periodic(
+      const Duration(seconds: _alertFetchIntervalSec),
+      (_) => _fetchAlerts(),
+    );
   }
 
   /// 환경(시간/날씨) 효과 맵에 적용
@@ -314,6 +328,19 @@ class SubwayOverlayController {
         '${env.weatherDescription} ${env.temperature.toStringAsFixed(1)}°C');
   }
 
+  /// 열차별 지연 감지 + 맵 렌더링 업데이트
+  Future<void> _fetchAlerts() async {
+    try {
+      _trainDelays = await _apiService.fetchTrainDelays();
+      if (_trainDelays.isNotEmpty) {
+        debugPrint('[SubwayOverlay] ⚠️ 지연 열차 ${_trainDelays.length}대');
+      }
+      onStateChanged?.call();
+    } catch (e) {
+      debugPrint('[SubwayOverlay] 지연 감지 실패 (무시): $e');
+    }
+  }
+
   /// 시각화 중지
   void stop() {
     _isActive = false;
@@ -322,6 +349,9 @@ class SubwayOverlayController {
     _refreshTimer = null;
     _animationTimer?.cancel();
     _animationTimer = null;
+    _alertTimer?.cancel();
+    _alertTimer = null;
+    _trainDelays.clear();
     _prevPositions.clear();
     _targetPositions.clear();
     _preApiPositions.clear();
@@ -582,7 +612,7 @@ class SubwayOverlayController {
 
     _currentTrains = filtered;
     _totalTrainCount = filtered.length;
-    _mapController!.updateTrainPositions3D(filtered);
+    _mapController!.updateTrainPositions3D(filtered, trainDelays: _trainDelays);
 
     // 선택된 열차 카메라 추적
     if (_selectedTrainNo != null) {
@@ -654,7 +684,7 @@ class SubwayOverlayController {
       ));
     }
 
-    _mapController!.updateTrainPositions3D(interpolated);
+    _mapController!.updateTrainPositions3D(interpolated, trainDelays: _trainDelays);
   }
 
   double _lerp(double a, double b, double t) => a + (b - a) * t;
@@ -782,6 +812,7 @@ class SubwayOverlayController {
 
   void dispose() {
     stop();
+    _alertTimer?.cancel();
     _envService.dispose();
   }
 }

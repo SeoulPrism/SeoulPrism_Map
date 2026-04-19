@@ -268,6 +268,52 @@ class InterpolatedTrainPosition {
   });
 }
 
+/// 지하철 지연/알림 정보
+/// 실시간 도착정보의 배차간격 분석 + 키워드 탐지로 생성
+class SubwayAlert {
+  final String alertId;         // 알림 고유 ID
+  final String subwayLineId;   // 노선 ID (1001, 1002 등)
+  final String subwayLineName; // 노선명 (1호선 등)
+  final String title;          // 알림 제목
+  final String content;        // 알림 내용
+  final String alertType;      // 알림 구분 (지연, 사고, 혼잡 등)
+  final String beginTime;      // 이례 상황 시작 시각
+  final String endTime;        // 이례 상황 종료 시각
+  final DateTime receivedAt;   // 수신 시각
+  final int delayMinutes;      // 추정 지연 시간 (분), 0이면 키워드만 감지
+
+  const SubwayAlert({
+    required this.alertId,
+    required this.subwayLineId,
+    required this.subwayLineName,
+    required this.title,
+    required this.content,
+    required this.alertType,
+    required this.beginTime,
+    required this.endTime,
+    required this.receivedAt,
+    this.delayMinutes = 0,
+  });
+
+  /// 종료되지 않은 진행 중인 알림인지 확인
+  bool get isActive => endTime.isEmpty || endTime == 'null' || endTime == '';
+
+  /// 지연 관련 알림인지 확인
+  bool get isDelay {
+    if (delayMinutes > 0) return true;
+    final lower = (title + content + alertType).toLowerCase();
+    return lower.contains('지연') || lower.contains('delay') ||
+           lower.contains('서행') || lower.contains('운행중지') ||
+           lower.contains('운행 중지') || lower.contains('장애');
+  }
+
+  /// 표시용 지연 시간 텍스트
+  String get delayText {
+    if (delayMinutes <= 0) return alertType;
+    return '약 $delayMinutes분 지연';
+  }
+}
+
 /// 서울 지하철 노선 ID → 색상 매핑
 class SubwayColors {
   static const Map<String, Color> lineColors = {

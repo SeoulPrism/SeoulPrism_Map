@@ -62,7 +62,8 @@ abstract class IMapController {
   // ── 3D 지하철 시각화 (Style Layer 기반) ──
 
   /// 3D 열차 위치 일괄 업데이트 (GeoJSON Source)
-  Future<void> updateTrainPositions3D(List<InterpolatedTrainPosition> trains) async {}
+  /// [trainDelays] 열차별 지연 시간 (trainNo → 분), 없으면 빈 맵
+  Future<void> updateTrainPositions3D(List<InterpolatedTrainPosition> trains, {Map<String, int> trainDelays = const {}}) async {}
 
   /// 3D 노선 경로 초기화 (지상/지하 구분)
   Future<void> initRoutes3D(Map<String, List<List<double>>> routeCoordinates,
@@ -106,6 +107,10 @@ abstract class IMapController {
     double rainIntensity = 0.0,
     double snowIntensity = 0.0,
   }) {}
+
+  /// 지연/장애 노선에 방어막(쉴드) 효과 표시 (MiniTokyo3D 스타일)
+  /// [delayInfo] 지연 노선 ID → 지연 분 수 (e.g., {'1002': 5, '1004': 12})
+  Future<void> updateDelayShield3D(Map<String, int> delayInfo) async {}
 }
 
 class CameraInfo {

@@ -199,7 +199,7 @@ class _GoogleMapEngineState extends State<GoogleMapEngine> implements IMapContro
   @override
   void applyWeatherEffect({required String lightPreset, double fogOpacity = 0.0, double atmosphereRange = 1.0, double rainIntensity = 0.0, double snowIntensity = 0.0}) {}
   @override
-  Future<void> updateTrainPositions3D(List<InterpolatedTrainPosition> trains) async {}
+  Future<void> updateTrainPositions3D(List<InterpolatedTrainPosition> trains, {Map<String, int> trainDelays = const {}}) async {}
   @override
   Future<void> initRoutes3D(Map<String, List<List<double>>> routeCoordinates,
       Map<String, Color> lineColors, Map<String, List<bool>> segmentUnderground) async {}
@@ -207,4 +207,6 @@ class _GoogleMapEngineState extends State<GoogleMapEngine> implements IMapContro
   Future<void> updateStations3D(List<Map<String, dynamic>> stations) async {}
   @override
   void setUndergroundVisible(bool visible) {}
+  @override
+  Future<void> updateDelayShield3D(Map<String, int> delayInfo) async {}
 }

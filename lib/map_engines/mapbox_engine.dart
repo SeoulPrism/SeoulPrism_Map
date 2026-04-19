@@ -45,6 +45,10 @@ class _MapboxEngineState extends State<MapboxEngine> implements IMapController {
   static const _stationDotLayerId = 'subway-stations-dot-layer';
   static const _stationLabelLayerId = 'subway-stations-label-layer';
   static const _stationOutlineLayerId = 'subway-stations-outline-layer';
+  // 열차별 지연 표시 레이어
+  static const _delaySourceId = 'subway-delay-source';
+  static const _delayGlowLayerId = 'subway-delay-glow-layer';
+  static const _delayLabelLayerId = 'subway-delay-label-layer';
   bool _layersInitialized3D = false;
   // ignore: unused_field
   bool _undergroundVisible = true;
@@ -478,6 +482,52 @@ class _MapboxEngineState extends State<MapboxEngine> implements IMapController {
       ));
 
       debugPrint('[MapboxEngine] ✅ 역 마커 레이어 생성 완료');
+
+      // 5) 열차별 지연 표시 — 발광 링 + "N분" 라벨
+      await style.addSource(GeoJsonSource(id: _delaySourceId, data: emptyGeoJson));
+
+      // 빨간 발광 링 (지연 열차 주변)
+      await style.addLayer(CircleLayer(
+        id: _delayGlowLayerId,
+        sourceId: _delaySourceId,
+        circleColorExpression: ['to-color', ['get', 'color']],
+        circleRadiusExpression: [
+          'interpolate', ['linear'], ['zoom'],
+          10, 10.0,
+          13, 18.0,
+          15, 30.0,
+          17, 48.0,
+        ],
+        circleBlur: 0.6,
+        circleOpacityExpression: ['get', 'opacity'],
+        circlePitchAlignment: CirclePitchAlignment.MAP,
+        circleSortKey: 8,
+        circleEmissiveStrength: 1.0,
+      ));
+
+      // "N분 지연" 라벨 — 확대 시(줌 14+)에만 표시
+      await style.addLayer(SymbolLayer(
+        id: _delayLabelLayerId,
+        sourceId: _delaySourceId,
+        textFieldExpression: ['get', 'label'],
+        textSizeExpression: [
+          'interpolate', ['linear'], ['zoom'],
+          16, 9.0,
+          17, 11.0,
+          18, 13.0,
+        ],
+        textColor: Colors.white.toARGB32(),
+        textHaloColor: const Color(0xFFCC2222).toARGB32(),
+        textHaloWidth: 2.0,
+        textOffsetExpression: ['literal', [0, -2.2]],
+        textAnchor: TextAnchor.BOTTOM,
+        textAllowOverlap: true,
+        textEmissiveStrength: 1.0,
+        minZoom: 16.0,
+      ));
+
+      debugPrint('[MapboxEngine] ✅ 열차 지연 표시 레이어 생성 완료');
+
       _layersInitialized3D = true;
     } catch (e) {
       debugPrint('[MapboxEngine] ❌ 3D 레이어 초기화 실패: $e');
@@ -490,6 +540,7 @@ class _MapboxEngineState extends State<MapboxEngine> implements IMapController {
     final style = _mapboxMap!.style;
 
     for (final layerId in [
+      _delayLabelLayerId, _delayGlowLayerId,
       _stationLabelLayerId, _stationDotLayerId, _stationOutlineLayerId,
       _selectedStationLayerId,
       '${_selectedTrainLayerId}-inner', _selectedTrainLayerId, _trainLayerId,
@@ -498,6 +549,7 @@ class _MapboxEngineState extends State<MapboxEngine> implements IMapController {
       style.removeStyleLayer(layerId);
     }
     for (final sourceId in [
+      _delaySourceId,
       _stationSourceId, _selectedStationSourceId,
       _selectedTrainSourceId, _trainSourceId,
       _routeSurfaceSourceId, _routeUndergroundSourceId,
@@ -599,7 +651,7 @@ class _MapboxEngineState extends State<MapboxEngine> implements IMapController {
   }
 
   @override
-  Future<void> updateTrainPositions3D(List<InterpolatedTrainPosition> trains) async {
+  Future<void> updateTrainPositions3D(List<InterpolatedTrainPosition> trains, {Map<String, int> trainDelays = const {}}) async {
     if (_mapboxMap == null || !_layersInitialized3D) return;
 
     // 열차 높이 (미터)
@@ -608,10 +660,23 @@ class _MapboxEngineState extends State<MapboxEngine> implements IMapController {
     final features = trains.map((train) {
       final color = SubwayColors.getColor(train.subwayId);
       final isSelected = train.trainNo == _selectedTrainNo;
-      // 선택된 열차: 밝은 색 + 더 높게
-      final colorStr = isSelected
-          ? _colorToRgba(_brightenColor(color, 0.3))
-          : _colorToRgba(color);
+      final delayMin = trainDelays[train.trainNo] ?? 0;
+      final isDelayed = delayMin >= 2;
+
+      // 지연 열차: 빨간색 계열, 선택 열차: 밝은 색
+      final String colorStr;
+      if (isSelected) {
+        colorStr = _colorToRgba(_brightenColor(color, 0.3));
+      } else if (isDelayed) {
+        // 지연 심각도에 따라 원래 색에 빨간 톤 혼합
+        final blend = (delayMin / 15.0).clamp(0.0, 1.0); // 15분 이상이면 완전 빨강
+        final r = (color.r + (1.0 - color.r) * blend).clamp(0.0, 1.0);
+        final g = (color.g * (1.0 - blend * 0.7)).clamp(0.0, 1.0);
+        final b = (color.b * (1.0 - blend * 0.7)).clamp(0.0, 1.0);
+        colorStr = 'rgba(${(r*255).round()},${(g*255).round()},${(b*255).round()},1)';
+      } else {
+        colorStr = _colorToRgba(color);
+      }
       final height = isSelected ? trainHeight + 10 : trainHeight;
       final isExpress = train.expressType == 1;
       final polygon = _trainPolygon(
@@ -683,6 +748,52 @@ class _MapboxEngineState extends State<MapboxEngine> implements IMapController {
       }));
     } else {
       await _updateSourceData(_selectedTrainSourceId,
+        '{"type":"FeatureCollection","features":[]}');
+    }
+
+    // 열차별 지연 표시 (빨간 발광 링 + "N분" 라벨)
+    if (trainDelays.isNotEmpty) {
+      final delayFeatures = <Map<String, dynamic>>[];
+      // 2초 주기 펄스
+      final p = (DateTime.now().millisecondsSinceEpoch % 2000) / 2000.0 * 2.0;
+      final pulse = p < 1.0 ? p : 2.0 - p;
+
+      for (final train in trains) {
+        final delayMin = trainDelays[train.trainNo];
+        if (delayMin == null || delayMin < 2) continue;
+
+        // 지연 심각도에 따른 색상
+        final String delayColor;
+        if (delayMin >= 10) {
+          delayColor = 'rgba(220,30,30,1)';
+        } else if (delayMin >= 5) {
+          delayColor = 'rgba(255,60,60,1)';
+        } else {
+          delayColor = 'rgba(255,160,40,1)';
+        }
+
+        final opacity = 0.2 + pulse * 0.4;
+
+        delayFeatures.add({
+          'type': 'Feature',
+          'geometry': {
+            'type': 'Point',
+            'coordinates': [train.lng, train.lat],
+          },
+          'properties': {
+            'color': delayColor,
+            'opacity': opacity,
+            'label': '$delayMin분 지연',
+          },
+        });
+      }
+
+      await _updateSourceData(_delaySourceId, jsonEncode({
+        'type': 'FeatureCollection',
+        'features': delayFeatures,
+      }));
+    } else {
+      await _updateSourceData(_delaySourceId,
         '{"type":"FeatureCollection","features":[]}');
     }
 
@@ -822,6 +933,11 @@ class _MapboxEngineState extends State<MapboxEngine> implements IMapController {
 
     await _updateSourceData(_stationSourceId, geojson);
     debugPrint('[MapboxEngine] 🚉 역 ${stations.length}개 업데이트');
+  }
+
+  @override
+  Future<void> updateDelayShield3D(Map<String, int> delayInfo) async {
+    // 열차별 지연은 updateTrainPositions3D에서 직접 처리
   }
 
   @override
