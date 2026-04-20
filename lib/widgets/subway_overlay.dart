@@ -10,6 +10,7 @@ import '../data/subway_geojson_loader.dart';
 import '../data/route_geometry.dart';
 import '../core/map_interface.dart';
 import '../services/environment_service.dart';
+import '../services/settings_service.dart';
 
 /// 운행 모드
 enum SubwayMode {
@@ -32,11 +33,25 @@ class SubwayOverlayController {
   Timer? _refreshTimer;
   Timer? _animationTimer;
   bool _isActive = false;
-  bool _showRoutes = true;
-  bool _showTrains = true;
-  bool _showStations = true;
-  SubwayMode _mode = SubwayMode.demo;
-  bool autoLighting = true; // true = 환경 서비스가 라이팅 제어
+  bool _showRoutes;
+  bool _showTrains;
+  bool _showStations;
+  SubwayMode _mode;
+  bool autoLighting;
+
+  SubwayOverlayController()
+      : _showRoutes = SettingsService.instance.showRoutes,
+        _showTrains = SettingsService.instance.showTrains,
+        _showStations = SettingsService.instance.showStations,
+        _mode = SettingsService.instance.mode == 'live' ? SubwayMode.live : SubwayMode.demo,
+        autoLighting = SettingsService.instance.autoLighting {
+    // 품질 프리셋 초기 적용
+    switch (_qualityPreset) {
+      case 'medium': _animIntervalMs = 33; break;
+      case 'low': _animIntervalMs = 100; break;
+      default: _animIntervalMs = 16; break;
+    }
+  }
 
   // 현재 상태
   List<InterpolatedTrainPosition> _currentTrains = [];
@@ -49,13 +64,18 @@ class SubwayOverlayController {
   Map<String, _AnimPos3D> _prevPositions = {};
   Map<String, _AnimPos3D> _targetPositions = {};
   double _animProgress = 1.0;
-  static const int _animIntervalMs = 16; // ~60fps
+  // 품질 프리셋에 따라 조절되는 값
+  int _animIntervalMs = 16; // ~60fps (high), 33ms=30fps (medium), 100ms=10fps (low)
   // Live 모드: 5분마다 API 호출
   static const int _liveApiFetchSec = 300;
   // 데모 모드 보간 주기 (10초)
   static const int _demoIntervalSec = 10;
   int _fetchIntervalSec = 300;
   int get _totalSteps => (_fetchIntervalSec * 1000) ~/ _animIntervalMs;
+
+  /// 현재 품질 프리셋
+  String _qualityPreset = SettingsService.instance.qualityPreset;
+  String get qualityPreset => _qualityPreset;
 
   // Live 모드: API 전환 시 부드러운 블렌딩
   DateTime? _apiTransitionStart;
@@ -64,7 +84,7 @@ class SubwayOverlayController {
   bool _layersInitialized3D = false;
 
   // 선택된 노선 필터 (null이면 전부 표시)
-  Set<String>? _selectedLines;
+  Set<String>? _selectedLines = SettingsService.instance.selectedLines;
 
   // 열차 선택 & 카메라 추적
   String? _selectedTrainNo;
@@ -221,6 +241,7 @@ class SubwayOverlayController {
     final wasActive = _isActive;
     if (wasActive) stop();
     _mode = newMode;
+    SettingsService.instance.setMode(newMode == SubwayMode.live ? 'live' : 'demo');
     if (wasActive) start();
     onStateChanged?.call();
   }
@@ -281,7 +302,7 @@ class SubwayOverlayController {
 
     // 애니메이션 타이머 (~60fps)
     _animationTimer = Timer.periodic(
-      const Duration(milliseconds: _animIntervalMs),
+      Duration(milliseconds: _animIntervalMs),
       (_) => _animationTick(),
     );
 
@@ -363,6 +384,7 @@ class SubwayOverlayController {
   /// 노선 필터 설정
   void setLineFilter(Set<String>? lines) {
     _selectedLines = lines;
+    SettingsService.instance.setSelectedLines(lines);
     if (_isActive) {
       _renderAnimatedTrains();
       if (_showRoutes) _drawSubwayRoutes();
@@ -373,6 +395,7 @@ class SubwayOverlayController {
   /// 노선 경로 표시 토글
   void toggleRoutes(bool show) {
     _showRoutes = show;
+    SettingsService.instance.setShowRoutes(show);
     if (_isActive) {
       if (show) {
         _drawSubwayRoutes();
@@ -387,6 +410,7 @@ class SubwayOverlayController {
   /// 열차 표시 토글
   void toggleTrains(bool show) {
     _showTrains = show;
+    SettingsService.instance.setShowTrains(show);
     if (_isActive) {
       if (show) {
         _renderAnimatedTrains();
@@ -400,12 +424,40 @@ class SubwayOverlayController {
   /// 역 표시 토글
   void toggleStations(bool show) {
     _showStations = show;
+    SettingsService.instance.setShowStations(show);
     if (_isActive) {
       if (show) {
         _drawStationMarkers();
       } else {
         _mapController?.updateStations3D([]);
       }
+    }
+    onStateChanged?.call();
+  }
+
+  /// 품질 프리셋 적용
+  /// high: 60fps, medium: 30fps, low: 10fps
+  void setQualityPreset(String preset) {
+    _qualityPreset = preset;
+    SettingsService.instance.setQualityPreset(preset);
+    switch (preset) {
+      case 'high':
+        _animIntervalMs = 16; // ~60fps
+        break;
+      case 'medium':
+        _animIntervalMs = 33; // ~30fps
+        break;
+      case 'low':
+        _animIntervalMs = 100; // ~10fps
+        break;
+    }
+    // 실행 중이면 애니메이션 타이머 재시작
+    if (_isActive && _animationTimer != null) {
+      _animationTimer?.cancel();
+      _animationTimer = Timer.periodic(
+        Duration(milliseconds: _animIntervalMs),
+        (_) => _animationTick(),
+      );
     }
     onStateChanged?.call();
   }
@@ -737,13 +789,16 @@ class SubwayOverlayController {
             .toList();
       }
 
-      // 지선도 추가 (seongsu, sinjeong, macheon 등)
+      // 지선도 추가 (gyeongin, seongsu, sinjeong, macheon 등)
       for (final entry in geojsonRoutes.entries) {
         if (entry.key.startsWith('${lineId}_') && entry.value.length >= 2) {
           routeCoords[entry.key] = entry.value;
           lineColors[entry.key] = color;
+          // 지선 전용 역 데이터가 있으면 그것으로 지상/지하 판별
+          final branchStations = SeoulSubwayData.getBranchStations(entry.key);
+          final stationsForClassify = branchStations.isNotEmpty ? branchStations : stations;
           segmentUnderground[entry.key] = entry.value.map((coord) {
-            final nearestStation = _findNearestStation(stations, coord[0], coord[1]);
+            final nearestStation = _findNearestStation(stationsForClassify, coord[0], coord[1]);
             return nearestStation != null
                 ? !SeoulSubwayData.isSurfaceStation(nearestStation.id)
                 : true;
@@ -791,6 +846,31 @@ class SubwayOverlayController {
 
         // OSM 경로에 스냅된 좌표 사용 (없으면 원래 좌표)
         final snapped = _routeGeometry.getStationPosition(lineId, station.name);
+        stationData.add({
+          'lat': snapped?[0] ?? station.lat,
+          'lng': snapped?[1] ?? station.lng,
+          'name': station.name,
+          'color': colorStr,
+          'isTransfer': station.transferLines.isNotEmpty,
+        });
+      }
+    }
+
+    // 지선(branch) 역도 추가
+    for (final branchEntry in SeoulSubwayData.branchToLineId.entries) {
+      final branchKey = branchEntry.key;
+      final parentLineId = branchEntry.value;
+      if (_selectedLines != null && !_selectedLines!.contains(parentLineId)) continue;
+
+      final branchStations = SeoulSubwayData.getBranchStations(branchKey);
+      final color = SubwayColors.getColor(parentLineId);
+      final colorStr = 'rgba(${(color.r * 255).round()},${(color.g * 255).round()},${(color.b * 255).round()},1)';
+
+      for (final station in branchStations) {
+        if (addedNames.contains(station.name)) continue;
+        addedNames.add(station.name);
+
+        final snapped = _routeGeometry.getStationPosition(branchKey, station.name);
         stationData.add({
           'lat': snapped?[0] ?? station.lat,
           'lng': snapped?[1] ?? station.lng,

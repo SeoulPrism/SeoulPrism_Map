@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import '../models/subway_models.dart';
 
-enum MapType { mapbox, google, naver }
+enum MapType { mapbox }
 
 abstract class IMapController {
   void moveTo(double lat, double lng, {double? zoom, double? pitch, double? bearing});

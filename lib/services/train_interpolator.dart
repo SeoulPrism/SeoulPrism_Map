@@ -12,6 +12,8 @@ class TrainInterpolator {
 
   /// 노선 ID → 역명 → 역 인덱스 캐시
   final Map<String, Map<String, int>> _stationIndexCache = {};
+  /// 지선(branch) 키 → 역명 → 역 인덱스 캐시
+  final Map<String, Map<String, int>> _branchIndexCache = {};
 
   TrainInterpolator() {
     for (final entry in SeoulSubwayData.lineIdToApiName.entries) {
@@ -22,6 +24,15 @@ class TrainInterpolator {
         indexMap[stations[i].name] = i;
       }
       _stationIndexCache[lineId] = indexMap;
+    }
+    // 지선 캐시 구축
+    for (final branchKey in SeoulSubwayData.branchToLineId.keys) {
+      final stations = SeoulSubwayData.getBranchStations(branchKey);
+      final indexMap = <String, int>{};
+      for (int i = 0; i < stations.length; i++) {
+        indexMap[stations[i].name] = i;
+      }
+      _branchIndexCache[branchKey] = indexMap;
     }
   }
 
@@ -43,6 +54,13 @@ class TrainInterpolator {
   /// 단일 열차의 보간된 지도 좌표 계산
   InterpolatedTrainPosition? interpolate(TrainPosition train) {
     final lineId = train.subwayId;
+
+    // 지선 체크: 현재 역이 지선 소속인지 확인
+    final branchKey = SeoulSubwayData.findBranchForStation(lineId, train.stationName);
+    if (branchKey != null) {
+      return _interpolateBranch(train, branchKey);
+    }
+
     final stations = SeoulSubwayData.getLineStations(lineId);
     if (stations.isEmpty) return null;
 
@@ -118,6 +136,107 @@ class TrainInterpolator {
       bearing = _calcBearing(stations, stationIndex, isUpbound);
     } else {
       // 폴백: 직선 보간
+      lat = _lerp(stations[fromIdx].lat, stations[toIdx].lat, t);
+      lng = _lerp(stations[fromIdx].lng, stations[toIdx].lng, t);
+      bearing = _bearingBetween(
+        stations[fromIdx].lat, stations[fromIdx].lng,
+        stations[toIdx].lat, stations[toIdx].lng,
+      );
+    }
+
+    final isUnderground = !SeoulSubwayData.isSurfaceStation(
+      fromIdx == toIdx ? stations[fromIdx].id : stations[toIdx].id,
+    );
+
+    return InterpolatedTrainPosition(
+      trainNo: train.trainNo,
+      subwayId: train.subwayId,
+      subwayName: train.subwayName,
+      lat: lat,
+      lng: lng,
+      altitude: 0,
+      isUnderground: isUnderground,
+      direction: train.direction,
+      terminalName: train.terminalName,
+      stationName: train.stationName,
+      trainStatus: train.trainStatus,
+      expressType: train.expressType,
+      isLastTrain: train.isLastTrain,
+      bearing: bearing,
+    );
+  }
+
+  /// 지선(branch) 열차 보간
+  InterpolatedTrainPosition? _interpolateBranch(TrainPosition train, String branchKey) {
+    final stations = SeoulSubwayData.getBranchStations(branchKey);
+    if (stations.isEmpty) return null;
+
+    final cache = _branchIndexCache[branchKey];
+    int? stationIndex;
+    if (cache != null) {
+      stationIndex = cache[train.stationName];
+    }
+    if (stationIndex == null) return null;
+
+    final isUpbound = train.direction == 0;
+    int fromIdx = stationIndex;
+    int toIdx = stationIndex;
+    double t = 0;
+
+    switch (train.trainStatus) {
+      case 1:
+        t = 1.0;
+        break;
+      case 2:
+        fromIdx = stationIndex;
+        toIdx = isUpbound
+            ? (stationIndex > 0 ? stationIndex - 1 : stationIndex)
+            : (stationIndex < stations.length - 1 ? stationIndex + 1 : stationIndex);
+        t = 0.15;
+        break;
+      case 0:
+        toIdx = stationIndex;
+        fromIdx = isUpbound
+            ? (stationIndex < stations.length - 1 ? stationIndex + 1 : stationIndex)
+            : (stationIndex > 0 ? stationIndex - 1 : stationIndex);
+        t = 0.85;
+        break;
+      case 3:
+        toIdx = stationIndex;
+        fromIdx = isUpbound
+            ? (stationIndex < stations.length - 1 ? stationIndex + 1 : stationIndex)
+            : (stationIndex > 0 ? stationIndex - 1 : stationIndex);
+        t = 0.3;
+        break;
+      default:
+        t = 0.5;
+    }
+
+    double lat, lng, bearing;
+    final rg = _routeGeometry;
+
+    if (rg != null && rg.hasRoute(branchKey) && fromIdx != toIdx) {
+      final fromName = stations[fromIdx].name;
+      final toName = stations[toIdx].name;
+      final pos = rg.interpolate(branchKey, fromName, toName, t);
+      if (pos != null) {
+        lat = pos[0];
+        lng = pos[1];
+        bearing = rg.bearingAt(branchKey, fromName, toName, t);
+      } else {
+        lat = _lerp(stations[fromIdx].lat, stations[toIdx].lat, t);
+        lng = _lerp(stations[fromIdx].lng, stations[toIdx].lng, t);
+        bearing = _bearingBetween(
+          stations[fromIdx].lat, stations[fromIdx].lng,
+          stations[toIdx].lat, stations[toIdx].lng,
+        );
+      }
+    } else if (fromIdx == toIdx) {
+      final snapped = rg?.getStationPosition(branchKey, stations[stationIndex].name);
+      lat = snapped?[0] ?? stations[stationIndex].lat;
+      lng = snapped?[1] ?? stations[stationIndex].lng;
+      bearing = _calcBearing(stations, stationIndex, isUpbound);
+    } else {
       lat = _lerp(stations[fromIdx].lat, stations[toIdx].lat, t);
       lng = _lerp(stations[fromIdx].lng, stations[toIdx].lng, t);
       bearing = _bearingBetween(

@@ -68,8 +68,46 @@ class RouteGeometry {
       _stationSnapped[lineId] = stSnap;
     }
 
+    // ── 지선(branch) 경로도 초기화 ──
+    for (final branchKey in SeoulSubwayData.branchToLineId.keys) {
+      final coords = geojson[branchKey];
+      if (coords == null || coords.length < 2) continue;
+
+      _routes[branchKey] = coords;
+
+      final cumDist = <double>[0.0];
+      for (int i = 1; i < coords.length; i++) {
+        final d = _haversine(
+          coords[i - 1][0], coords[i - 1][1],
+          coords[i][0], coords[i][1],
+        );
+        cumDist.add(cumDist.last + d);
+      }
+      _cumDist[branchKey] = cumDist;
+
+      final stations = SeoulSubwayData.getBranchStations(branchKey);
+      final stDist = <String, double>{};
+      final stSnap = <String, List<double>>{};
+
+      for (final station in stations) {
+        final snap = _snapToRoute(coords, cumDist, station.lat, station.lng);
+        final snapDistM = _haversine(station.lat, station.lng, snap.lat, snap.lng);
+        if (snapDistM > 500) {
+          debugPrint('[RouteGeometry] ⚠️ $branchKey ${station.name}: 스냅 거리 ${snapDistM.round()}m → 원래 좌표 유지');
+          stDist[station.name] = snap.dist;
+          stSnap[station.name] = [station.lat, station.lng];
+        } else {
+          stDist[station.name] = snap.dist;
+          stSnap[station.name] = [snap.lat, snap.lng];
+        }
+      }
+
+      _stationDist[branchKey] = stDist;
+      _stationSnapped[branchKey] = stSnap;
+    }
+
     _initialized = true;
-    debugPrint('[RouteGeometry] 초기화 완료: ${_routes.length}개 노선');
+    debugPrint('[RouteGeometry] 초기화 완료: ${_routes.length}개 노선 (지선 포함)');
   }
 
   /// 두 역 사이 경로를 따라 보간된 위치 반환

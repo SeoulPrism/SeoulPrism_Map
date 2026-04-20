@@ -990,7 +990,7 @@ class StationDetailPanel extends StatelessWidget {
     return Container(
       width: double.infinity,
       margin: const EdgeInsets.symmetric(horizontal: 12),
-      constraints: const BoxConstraints(maxHeight: 420),
+      // maxHeight controlled by parent ConstrainedBox
       decoration: BoxDecoration(
         color: const Color(0xF01A1A2E),
         borderRadius: BorderRadius.circular(16),

@@ -1026,10 +1026,10 @@ class _MapboxEngineState extends State<MapboxEngine> implements IMapController {
   void _onMapCreated(MapboxMap mapboxMap) {
     _mapboxMap = mapboxMap;
 
-    // 나침반을 우하단으로 이동 (탭바 위)
+    // 나침반을 우상단으로 이동
     mapboxMap.compass.updateSettings(CompassSettings(
-      position: OrnamentPosition.BOTTOM_RIGHT,
-      marginBottom: 80,
+      position: OrnamentPosition.TOP_RIGHT,
+      marginTop: 100,
       marginRight: 12,
     ));
 

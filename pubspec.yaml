@@ -12,14 +12,13 @@ dependencies:
     sdk: flutter
   cupertino_icons: ^1.0.8
   
-  # Map Engines (v2.x.x 이상으로 업데이트하여 Swift 호환성 해결)
+  # Map Engine
   mapbox_maps_flutter: ^2.1.0
-  google_maps_flutter: ^2.10.0
-  flutter_naver_map: ^1.3.0
   
   # Utilities
   http: ^1.2.0
   cupertino_native_better: ^1.4.2
+  shared_preferences: ^2.5.5
 
 dev_dependencies:
   flutter_test:
