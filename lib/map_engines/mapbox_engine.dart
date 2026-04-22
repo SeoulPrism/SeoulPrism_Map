@@ -41,10 +41,13 @@ class _MapboxEngineState extends State<MapboxEngine> implements IMapController {
   static const _routeSurfaceLayerId = 'subway-routes-surface-layer';
   static const _routeUndergroundSourceId = 'subway-routes-underground-source';
   static const _routeUndergroundLayerId = 'subway-routes-underground-layer';
-  static const _stationSourceId = 'subway-stations-source';
+  static const _stationSourceId = 'subway-stations-source';       // 노선별 도트 (Point)
+  static const _stationPillSourceId = 'subway-stations-pill-source'; // 캡슐 배경 (LineString)
   static const _stationDotLayerId = 'subway-stations-dot-layer';
   static const _stationLabelLayerId = 'subway-stations-label-layer';
   static const _stationOutlineLayerId = 'subway-stations-outline-layer';
+  static const _stationPillOutlineLayerId = 'subway-stations-pill-outline-layer';
+  static const _stationPillFillLayerId = 'subway-stations-pill-fill-layer';
   // 열차별 지연 표시 레이어
   static const _delaySourceId = 'subway-delay-source';
   static const _delayGlowLayerId = 'subway-delay-glow-layer';
@@ -375,7 +378,7 @@ class _MapboxEngineState extends State<MapboxEngine> implements IMapController {
         circleEmissiveStrength: 1.0,
       ));
 
-      // 2) 지상 노선 경로 — LineLayer (3D 고도)
+      // 2) 지상 노선 경로 — LineLayer (고가 철도 높이에 맞춰 3D 띄움)
       await style.addSource(GeoJsonSource(id: _routeSurfaceSourceId, data: emptyGeoJson));
 
       await style.addLayer(LineLayer(
@@ -420,40 +423,60 @@ class _MapboxEngineState extends State<MapboxEngine> implements IMapController {
 
       debugPrint('[MapboxEngine] ✅ 지하 노선 LineLayer 생성 완료');
 
-      // 4) 역 마커 — MiniTokyo3D 스타일 (줌 반응형)
+      // 4) 역 마커 — MiniTokyo3D 스타일 캡슐/필(pill) 마커
+      // 캡슐 배경 소스 (LineString — 둥근 끝캡으로 필 모양)
+      await style.addSource(GeoJsonSource(id: _stationPillSourceId, data: emptyGeoJson));
+      // ���선별 도트 소스 (Point — 캡슐 안에 배치)
       await style.addSource(GeoJsonSource(id: _stationSourceId, data: emptyGeoJson));
 
-      // 역 외곽선 (노선색)
+      // 4-a) 캡슐 외곽선 (어두운 테두리)
+      await style.addLayer(LineLayer(
+        id: _stationPillOutlineLayerId,
+        sourceId: _stationPillSourceId,
+        lineColor: const Color(0xFF333333).toARGB32(),
+        lineWidthExpression: [
+          'interpolate', ['linear'], ['zoom'],
+          8, 4.0,
+          11, 7.0,
+          13, 12.0,
+          15, 18.0,
+          17, 26.0,
+        ],
+        lineCap: LineCap.ROUND,
+        lineJoin: LineJoin.ROUND,
+        lineEmissiveStrength: 0.8,
+      ));
+
+      // 4-b) 캡슐 내부 (흰색 채움)
+      await style.addLayer(LineLayer(
+        id: _stationPillFillLayerId,
+        sourceId: _stationPillSourceId,
+        lineColor: Colors.white.toARGB32(),
+        lineWidthExpression: [
+          'interpolate', ['linear'], ['zoom'],
+          8, 2.5,
+          11, 5.0,
+          13, 9.0,
+          15, 14.0,
+          17, 22.0,
+        ],
+        lineCap: LineCap.ROUND,
+        lineJoin: LineJoin.ROUND,
+        lineEmissiveStrength: 0.8,
+      ));
+
+      // 4-c) 노선색 도트 (캡슐 안에 각 노선별 1개)
       await style.addLayer(CircleLayer(
         id: _stationOutlineLayerId,
         sourceId: _stationSourceId,
         circleColorExpression: ['to-color', ['get', 'color']],
         circleRadiusExpression: [
           'interpolate', ['linear'], ['zoom'],
-          8, 1.5,
-          11, 3.0,
-          13, 5.0,
-          15, 8.0,
-          17, 12.0,
-        ],
-        circleStrokeWidth: 0.0,
-        circlePitchAlignment: CirclePitchAlignment.MAP,
-        circleSortKey: 3,
-        circleEmissiveStrength: 0.8,
-      ));
-
-      // 역 내부 (흰색 — MiniTokyo3D 스타일)
-      await style.addLayer(CircleLayer(
-        id: _stationDotLayerId,
-        sourceId: _stationSourceId,
-        circleColor: Colors.white.toARGB32(),
-        circleRadiusExpression: [
-          'interpolate', ['linear'], ['zoom'],
-          8, 0.8,
-          11, 1.8,
-          13, 3.0,
-          15, 5.5,
-          17, 9.0,
+          8, 1.2,
+          11, 2.2,
+          13, 4.0,
+          15, 6.0,
+          17, 9.5,
         ],
         circleStrokeWidth: 0.0,
         circlePitchAlignment: CirclePitchAlignment.MAP,
@@ -461,13 +484,29 @@ class _MapboxEngineState extends State<MapboxEngine> implements IMapController {
         circleEmissiveStrength: 0.8,
       ));
 
-      // 환승역은 더 크게 (isTransfer property)
-      // → CircleLayer expression으로 처리
+      // 4-d) 도트 내부 흰색 점 (미니도쿄 스타일)
+      await style.addLayer(CircleLayer(
+        id: _stationDotLayerId,
+        sourceId: _stationSourceId,
+        circleColor: Colors.white.toARGB32(),
+        circleRadiusExpression: [
+          'interpolate', ['linear'], ['zoom'],
+          8, 0.5,
+          11, 1.0,
+          13, 1.8,
+          15, 2.8,
+          17, 4.5,
+        ],
+        circleStrokeWidth: 0.0,
+        circlePitchAlignment: CirclePitchAlignment.MAP,
+        circleSortKey: 5,
+        circleEmissiveStrength: 0.8,
+      ));
 
-      // 역명 라벨 (줌 14 이상에서 표시)
+      // 4-e) 역명 라벨 (줌 14 이상, 캡슐 소스 기준 — 역 1개당 1라벨)
       await style.addLayer(SymbolLayer(
         id: _stationLabelLayerId,
-        sourceId: _stationSourceId,
+        sourceId: _stationPillSourceId,
         textFieldExpression: ['get', 'name'],
         textSize: 11.0,
         textColor: Colors.white.toARGB32(),
@@ -477,11 +516,12 @@ class _MapboxEngineState extends State<MapboxEngine> implements IMapController {
         textAnchor: TextAnchor.TOP,
         textOptional: true,
         textAllowOverlap: false,
+        symbolPlacement: SymbolPlacement.POINT,
         minZoom: 14.0,
         textEmissiveStrength: 1.0,
       ));
 
-      debugPrint('[MapboxEngine] ✅ 역 마커 레이어 생성 완료');
+      debugPrint('[MapboxEngine] ✅ 역 마커 레이어 생성 완료 (MiniTokyo3D 캡슐 스타일)');
 
       // 5) 열차별 지연 표시 — 발광 링 + "N분" 라벨
       await style.addSource(GeoJsonSource(id: _delaySourceId, data: emptyGeoJson));
@@ -542,6 +582,7 @@ class _MapboxEngineState extends State<MapboxEngine> implements IMapController {
     for (final layerId in [
       _delayLabelLayerId, _delayGlowLayerId,
       _stationLabelLayerId, _stationDotLayerId, _stationOutlineLayerId,
+      _stationPillFillLayerId, _stationPillOutlineLayerId,
       _selectedStationLayerId,
       '${_selectedTrainLayerId}-inner', _selectedTrainLayerId, _trainLayerId,
       _routeSurfaceLayerId, _routeUndergroundLayerId,
@@ -550,7 +591,7 @@ class _MapboxEngineState extends State<MapboxEngine> implements IMapController {
     }
     for (final sourceId in [
       _delaySourceId,
-      _stationSourceId, _selectedStationSourceId,
+      _stationSourceId, _stationPillSourceId, _selectedStationSourceId,
       _selectedTrainSourceId, _trainSourceId,
       _routeSurfaceSourceId, _routeUndergroundSourceId,
     ]) {
@@ -590,15 +631,20 @@ class _MapboxEngineState extends State<MapboxEngine> implements IMapController {
   /// 열차 위치를 3D 블록용 Polygon으로 변환
   /// 진행방향(bearing)에 맞게 회전 + 상행/하행 오프셋 적용
   List<List<double>> _trainPolygon(
-    double lat, double lng, double bearing, bool isExpress, int direction,
+    double lat, double lng, double bearing, int expressType, int direction,
   ) {
-    // 상행/하행 복선 오프셋 적용
     final offset = _offsetPosition(lat, lng, bearing, direction);
     final oLat = offset[0];
     final oLng = offset[1];
 
-    final lengthM = isExpress ? 60.0 : 45.0;
-    final widthM = isExpress ? 25.0 : 20.0;
+    final double lengthM, widthM;
+    if (expressType == 7) {
+      lengthM = 75.0; widthM = 28.0;
+    } else if (expressType == 1) {
+      lengthM = 60.0; widthM = 25.0;
+    } else {
+      lengthM = 45.0; widthM = 20.0;
+    }
     final halfL = lengthM / 2;
     final halfW = widthM / 2;
 
@@ -693,6 +739,8 @@ class _MapboxEngineState extends State<MapboxEngine> implements IMapController {
       final isSelected = train.trainNo == _selectedTrainNo;
       final delayMin = trainDelays[train.trainNo] ?? 0;
       final isDelayed = delayMin >= 2;
+      final isExpress = train.expressType == 1;
+      final isSuperExpress = train.expressType == 7;
 
       final String colorStr;
       if (isSelected) {
@@ -704,15 +752,33 @@ class _MapboxEngineState extends State<MapboxEngine> implements IMapController {
         final g = (color.g * (1.0 - blend * 0.7)).clamp(0.0, 1.0);
         final b = (color.b * (1.0 - blend * 0.7)).clamp(0.0, 1.0);
         colorStr = 'rgba(${(r*255).round()},${(g*255).round()},${(b*255).round()},1)';
+      } else if (isSuperExpress) {
+        // 초급행: 금색 하이라이트 (노선색 + 골드 블렌드)
+        final color = SubwayColors.getColor(train.subwayId);
+        final r = ((color.r * 0.5 + 0.5) * 255).round().clamp(0, 255);
+        final g = ((color.g * 0.4 + 0.6 * 0.84) * 255).round().clamp(0, 255);
+        final b = ((color.b * 0.3 + 0.7 * 0.0) * 255).round().clamp(0, 255);
+        colorStr = 'rgba($r,$g,$b,1)';
+      } else if (isExpress) {
+        // 급행: 밝은 노선색
+        colorStr = _getCachedBrightColorStr(train.subwayId);
       } else {
         colorStr = _getCachedColorStr(train.subwayId);
       }
 
-      final height = isSelected ? trainHeight + 10 : trainHeight;
-      final isExpress = train.expressType == 1;
+      // 급행/초급행은 더 높은 3D 블록
+      final double height;
+      if (isSelected) {
+        height = trainHeight + 10;
+      } else if (isSuperExpress) {
+        height = trainHeight + 15; // 초급행: 가장 높음
+      } else if (isExpress) {
+        height = trainHeight + 8; // 급행: 약간 높음
+      } else {
+        height = trainHeight;
+      }
 
-      // 폴리곤 좌표를 StringBuffer에 직접 기록 (List 할당 제거)
-      _writeTrainFeature(sb, train, colorStr, height, isExpress);
+      _writeTrainFeature(sb, train, colorStr, height, train.expressType);
     }
 
     sb.write(']}');
@@ -805,20 +871,28 @@ class _MapboxEngineState extends State<MapboxEngine> implements IMapController {
   }
 
   /// 열차 Feature를 StringBuffer에 직접 기록 (Map/List 할당 없이)
+  /// expressType: 0=일반, 1=급행, 7=특급(초급행)
   void _writeTrainFeature(
     StringBuffer sb,
     InterpolatedTrainPosition train,
     String colorStr,
     double height,
-    bool isExpress,
+    int expressType,
   ) {
     // 폴리곤 좌표 계산 (인라인)
     final offset = _offsetPosition(train.lat, train.lng, train.bearing, train.direction);
     final oLat = offset[0];
     final oLng = offset[1];
 
-    final lengthM = isExpress ? 60.0 : 45.0;
-    final widthM = isExpress ? 25.0 : 20.0;
+    // 급행/초급행은 더 큰 열차 블록
+    final double lengthM, widthM;
+    if (expressType == 7) {
+      lengthM = 75.0; widthM = 28.0; // 초급행: 가장 큼
+    } else if (expressType == 1) {
+      lengthM = 60.0; widthM = 25.0; // 급행
+    } else {
+      lengthM = 45.0; widthM = 20.0; // 일반
+    }
     final halfL = lengthM / 2;
     final halfW = widthM / 2;
 
@@ -920,29 +994,49 @@ class _MapboxEngineState extends State<MapboxEngine> implements IMapController {
   }
 
   @override
-  Future<void> updateStations3D(List<Map<String, dynamic>> stations) async {
+  Future<void> updateStations3D(List<Map<String, dynamic>> pills, List<Map<String, dynamic>> dots) async {
     if (_mapboxMap == null || !_layersInitialized3D) return;
 
-    final features = stations.map((s) => {
+    // 캡슐 배경 (LineString — 둥근 끝캡으로 필 모양 생성)
+    final pillFeatures = pills.map((p) {
+      final n = p['lineCount'] as int;
+      // 단일역: 극소 길이 LineString (둥근 끝캡 → 원형)
+      final coords = n <= 1
+          ? [[p['startLng'], p['startLat']],
+             [p['startLng'] + 0.0000001, p['startLat'] + 0.0000001]]
+          : [[p['startLng'], p['startLat']],
+             [p['endLng'], p['endLat']]];
+      return {
+        'type': 'Feature',
+        'geometry': {'type': 'LineString', 'coordinates': coords},
+        'properties': {'name': p['name'], 'lineCount': n},
+      };
+    }).toList();
+
+    await _updateSourceData(_stationPillSourceId, jsonEncode({
+      'type': 'FeatureCollection',
+      'features': pillFeatures,
+    }));
+
+    // 노선별 컬러 도트 (Point)
+    final dotFeatures = dots.map((d) => {
       'type': 'Feature',
       'geometry': {
         'type': 'Point',
-        'coordinates': [s['lng'], s['lat']],
+        'coordinates': [d['lng'], d['lat']],
       },
       'properties': {
-        'name': s['name'],
-        'color': s['color'],
-        'isTransfer': s['isTransfer'] ?? false,
+        'name': d['name'],
+        'color': d['color'],
       },
     }).toList();
 
-    final geojson = jsonEncode({
+    await _updateSourceData(_stationSourceId, jsonEncode({
       'type': 'FeatureCollection',
-      'features': features,
-    });
+      'features': dotFeatures,
+    }));
 
-    await _updateSourceData(_stationSourceId, geojson);
-    debugPrint('[MapboxEngine] 🚉 역 ${stations.length}개 업데이트');
+    debugPrint('[MapboxEngine] 🚉 역 ${pills.length}개 (도트 ${dots.length}개) 업데이트');
   }
 
   @override

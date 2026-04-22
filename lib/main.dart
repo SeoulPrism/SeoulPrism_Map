@@ -9,6 +9,7 @@ import 'models/subway_models.dart';
 import 'widgets/subway_overlay.dart';
 import 'widgets/weather_widget.dart';
 import 'widgets/subway_panel.dart';
+import 'widgets/station_search_bar.dart';
 import 'services/settings_service.dart';
 
 void main() async {
@@ -135,10 +136,17 @@ class _DashboardScreenState extends State<DashboardScreen> {
           // 지도 엔진 (항상 렌더링)
           Positioned.fill(child: MapboxEngine(initialCamera: _cameraInfo, onMapCreated: _onMapCreated)),
 
-          // 날씨/시간 위젯 (우상단, 활성화 시)
+          // 검색바 + 프로필 (상단, 리퀴드 글라스)
+          StationSearchBar(
+            onStationSelected: (name) {
+              _subwayController.selectStation(name);
+            },
+          ),
+
+          // 날씨/시간 위젯 (검색바 아래, 우측)
           if (_subwayController.isActive)
             Positioned(
-              top: MediaQuery.of(context).padding.top + 8,
+              top: MediaQuery.of(context).padding.top + 56,
               right: 12,
               child: WeatherTimeWidget(environment: _subwayController.environment),
             ),
@@ -449,6 +457,15 @@ class _SettingsPanelState extends State<SettingsPanel> {
             }),
             _toggleRow('역 표시', widget.subwayController.showStations, (v) {
               widget.subwayController.toggleStations(v);
+              setState(() {});
+            }),
+            const Divider(height: 12, color: Colors.white12),
+            _toggleRow('서울시 공공 API (60s)', widget.subwayController.useSeoulApi, (v) {
+              widget.subwayController.setUseSeoulApi(v);
+              setState(() {});
+            }),
+            _toggleRow('네이버 API (5s)', widget.subwayController.useNaverApi, (v) {
+              widget.subwayController.setUseNaverApi(v);
               setState(() {});
             }),
           ],

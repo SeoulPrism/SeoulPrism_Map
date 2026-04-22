@@ -194,6 +194,27 @@ class RouteGeometry {
   /// 노선 경로가 있는지 확인
   bool hasRoute(String lineId) => _routes.containsKey(lineId);
 
+  /// 누적 거리(미터) → 좌표 변환 (public)
+  List<double>? positionAtDistance(String lineId, double distanceM) {
+    return _positionAtDist(lineId, distanceM);
+  }
+
+  /// 누적 거리(미터) → 베어링 (진행 방향, degrees)
+  double bearingAtDistance(String lineId, double distanceM) {
+    const delta = 10.0;
+    final p1 = _positionAtDist(lineId, distanceM - delta);
+    final p2 = _positionAtDist(lineId, distanceM + delta);
+    if (p1 == null || p2 == null) return 0;
+    return _bearing(p1[0], p1[1], p2[0], p2[1]);
+  }
+
+  /// 노선의 총 경로 길이 (미터)
+  double? routeLengthM(String lineId) {
+    final cd = _cumDist[lineId];
+    if (cd == null || cd.isEmpty) return null;
+    return cd.last;
+  }
+
   // ━━━━━━ 내부 유틸리티 ━━━━━━
 
   /// 좌표를 경로 polyline에 스냅 (최근접점 + 누적 거리)

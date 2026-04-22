@@ -856,11 +856,11 @@ class TrainDetailPanel extends StatelessWidget {
     Color chipColor;
     switch (status) {
       case 0:
-        text = '진입';
+        text = '곧 도착';
         chipColor = Colors.amber;
         break;
       case 1:
-        text = '정차';
+        text = '정차중';
         chipColor = Colors.greenAccent;
         break;
       case 2:
@@ -868,7 +868,7 @@ class TrainDetailPanel extends StatelessWidget {
         chipColor = lineColor;
         break;
       case 3:
-        text = '운행';
+        text = '이동중';
         chipColor = lineColor;
         break;
       default:

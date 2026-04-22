@@ -1,6 +1,8 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:math';
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
 import '../models/subway_models.dart';
 import '../data/seoul_subway_data.dart';
 import '../services/seoul_subway_service.dart';
@@ -66,11 +68,13 @@ class SubwayOverlayController {
   double _animProgress = 1.0;
   // 품질 프리셋에 따라 조절되는 값
   int _animIntervalMs = 16; // ~60fps (high), 33ms=30fps (medium), 100ms=10fps (low)
-  // Live 모드: 5분마다 API 호출
-  static const int _liveApiFetchSec = 300;
+  // Live 모드: 공식 API 60초 + 네이버 API 30초
+  static const int _liveApiFetchSec = 60;
+  static const int _naverApiFetchSec = 1; // 테스트용 1초
+  Timer? _naverRefreshTimer;
   // 데모 모드 보간 주기 (10초)
   static const int _demoIntervalSec = 10;
-  int _fetchIntervalSec = 300;
+  int _fetchIntervalSec = 60;
   int get _totalSteps => (_fetchIntervalSec * 1000) ~/ _animIntervalMs;
 
   /// 현재 품질 프리셋
@@ -78,9 +82,7 @@ class SubwayOverlayController {
   String get qualityPreset => _qualityPreset;
 
   // Live 모드: API 전환 시 부드러운 블렌딩
-  DateTime? _apiTransitionStart;
-  final Map<String, _AnimPos3D> _preApiPositions = {};
-  static const double _apiTransitionDurationSec = 1.5; // API 데이터 전환 블렌딩 시간
+  // (교정형 시뮬에서는 블렌딩 불필요 — 시뮬레이터가 자체적으로 부드러운 전환)
   bool _layersInitialized3D = false;
 
   // 선택된 노선 필터 (null이면 전부 표시)
@@ -120,6 +122,8 @@ class SubwayOverlayController {
   DateTime? get lastUpdate => _lastUpdate;
   int get totalTrainCount => _totalTrainCount;
   Set<String>? get selectedLines => _selectedLines;
+  bool get useSeoulApi => SettingsService.instance.useSeoulApi;
+  bool get useNaverApi => SettingsService.instance.useNaverApi;
   int get apiCallCount => _apiService.callCount;
   int get apiRemainingCalls => _apiService.remainingCalls;
   int get fetchIntervalSec => _fetchIntervalSec;
@@ -259,6 +263,10 @@ class SubwayOverlayController {
         await _routeGeometry.init();
         _interpolator.setRouteGeometry(_routeGeometry);
         _simulator.setRouteGeometry(_routeGeometry);
+        _simulator.onTrainArrivedAtStation = () {
+          // 역 도착 시 네이버 API 추가 호출 (정확도 보정)
+          _fetchNaverApi();
+        };
       }
     } catch (e) {
       debugPrint('[SubwayOverlay] ⚠️ RouteGeometry 초기화 실패 (직선 폴백): $e');
@@ -290,14 +298,24 @@ class SubwayOverlayController {
       // 타이머 없음 — 연속 보간이 자체적으로 구간 전환 처리
       debugPrint('[SubwayOverlay] 🎮 데모 모드 시작 (60fps 연속 보간)');
     } else {
-      // Live 모드: API 5분 + 매 프레임 연속 보간 (60fps)
       _fetchIntervalSec = _liveApiFetchSec;
-      await _fetchAndRender();
-      _refreshTimer = Timer.periodic(
-        const Duration(seconds: _liveApiFetchSec),
-        (_) => _fetchAndRender(),
-      );
-      debugPrint('[SubwayOverlay] 📡 Live 모드 시작 (API ${_liveApiFetchSec}s + 60fps 연속 보간)');
+      // 서울시 공식 API (설정에 따라)
+      if (useSeoulApi) {
+        await _fetchAndRender();
+        _refreshTimer = Timer.periodic(
+          const Duration(seconds: _liveApiFetchSec), (_) => _fetchAndRender(),
+        );
+      }
+      // 네이버 비공식 API (설정에 따라)
+      if (useNaverApi) {
+        _fetchNaverApi();
+        _naverRefreshTimer = Timer.periodic(
+          const Duration(seconds: _naverApiFetchSec), (_) => _fetchNaverApi(),
+        );
+      }
+      debugPrint('[SubwayOverlay] 📡 Live 모드 시작 '
+          '(서울API:${useSeoulApi ? "${_liveApiFetchSec}s" : "OFF"} '
+          '네이버:${useNaverApi ? "${_naverApiFetchSec}s" : "OFF"})');
     }
 
     // 애니메이션 타이머 (~60fps)
@@ -368,6 +386,8 @@ class SubwayOverlayController {
     _envService.stop();
     _refreshTimer?.cancel();
     _refreshTimer = null;
+    _naverRefreshTimer?.cancel();
+    _naverRefreshTimer = null;
     _animationTimer?.cancel();
     _animationTimer = null;
     _alertTimer?.cancel();
@@ -375,8 +395,6 @@ class SubwayOverlayController {
     _trainDelays.clear();
     _prevPositions.clear();
     _targetPositions.clear();
-    _preApiPositions.clear();
-    _apiTransitionStart = null;
     _clearAllOverlays();
     onStateChanged?.call();
   }
@@ -429,7 +447,39 @@ class SubwayOverlayController {
       if (show) {
         _drawStationMarkers();
       } else {
-        _mapController?.updateStations3D([]);
+        _mapController?.updateStations3D([], []);
+      }
+    }
+    onStateChanged?.call();
+  }
+
+  /// API 소스 토글
+  void setUseSeoulApi(bool v) {
+    SettingsService.instance.setUseSeoulApi(v);
+    if (_isActive && _mode == SubwayMode.live) {
+      _refreshTimer?.cancel();
+      if (v) {
+        _refreshTimer = Timer.periodic(
+          const Duration(seconds: _liveApiFetchSec), (_) => _fetchAndRender(),
+        );
+      } else {
+        _refreshTimer = null;
+      }
+    }
+    onStateChanged?.call();
+  }
+
+  void setUseNaverApi(bool v) {
+    SettingsService.instance.setUseNaverApi(v);
+    if (_isActive && _mode == SubwayMode.live) {
+      _naverRefreshTimer?.cancel();
+      if (v) {
+        _naverRefreshTimer = Timer.periodic(
+          const Duration(seconds: _naverApiFetchSec), (_) => _fetchNaverApi(),
+        );
+        _fetchNaverApi(); // 즉시 1회 호출
+      } else {
+        _naverRefreshTimer = null;
       }
     }
     onStateChanged?.call();
@@ -522,20 +572,99 @@ class SubwayOverlayController {
     onStateChanged?.call();
   }
 
-  /// API에서 데이터 fetch (Live 모드)
+  /// 네이버 지도 API로 전 노선 실시간 위치 fetch (30초마다)
+  /// 비공식 API, 제한 없음, 공식 API 사이 보조용
+  Future<void> _fetchNaverApi() async {
+    if (!_isActive || _mode != SubwayMode.live || !useNaverApi) return;
+
+    try {
+      final trains = await _fetchNaverTrainPositions();
+      if (trains.isEmpty) return;
+
+      // 기존 공식 API 스냅샷과 merge
+      // 네이버에서 온 열차는 기존 것을 보충 (덮어쓰기 아님)
+      final existingNos = _simulator.lastApiSnapshot.map((t) => t.trainNo).toSet();
+      final newTrains = trains.where((t) => !existingNos.contains(t.trainNo)).toList();
+      final merged = [..._simulator.lastApiSnapshot, ...newTrains];
+
+      _simulator.updateApiSnapshot(merged);
+      _simulator.prepareContinuousExtrapolation();
+      debugPrint('[SubwayOverlay] 🌐 네이버 API: ${trains.length}대 (신규 ${newTrains.length}대)');
+    } catch (e) {
+      debugPrint('[SubwayOverlay] 네이버 API 실패: $e');
+    }
+  }
+
+  /// 네이버 지도 API에서 전 노선 열차 위치 가져오기
+  // 네이버 routeId → 서울시 API subwayId 매핑 (확인된 노선만)
+  static const Map<String, String> _naverRouteIds = {
+    // 1호선: 네이버 미지원 (서울시 공식 API로만)
+    '2': '1002', '3': '1003', '4': '1004', '5': '1005',
+    '6': '1006', '7': '1007', '8': '1008', '9': '1009',
+    '101': '1063', // 경의중앙선
+    '104': '1067', // 경춘선
+    '108': '1065', // 공항철도
+    '109': '1094', // 신림선
+    // 수인분당(102), 신분당(103), 경강(105), 우이신설(106),
+    // 서해(107), GTX-A(151): 네이버 미지원
+  };
+
+  Future<List<TrainPosition>> _fetchNaverTrainPositions() async {
+    final results = <TrainPosition>[];
+
+    for (final entry in _naverRouteIds.entries) {
+      for (final dir in [0, 1]) {
+        try {
+          final url = Uri.parse(
+            'https://pts.map.naver.com/end-subway/api/realtime/location/subway/integrated'
+            '?direction=$dir&routeId=${entry.key}&caller=pc_web&lang=ko',
+          );
+          final response = await http.get(url, headers: {
+            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)',
+          }).timeout(const Duration(seconds: 5));
+
+          if (response.statusCode == 200) {
+            final List<dynamic> data = jsonDecode(response.body);
+            for (final item in data) {
+              if (item['operatingStatus'] == 'END') continue;
+              final trainNos = item['trainNo'] as List? ?? [];
+              final trainNo = trainNos.isNotEmpty
+                  ? (trainNos[0]['trainNo']?.toString() ?? '') : '';
+              if (trainNo.isEmpty) continue;
+
+              // statusCd: 0=접근, 1=도착, 2=출발 → 우리 코드: 0=곧도착, 1=정차, 2=출발
+              final statusCd = int.tryParse(item['statusCd']?.toString() ?? '0') ?? 0;
+              final trainStatus = statusCd == 0 ? 0 : (statusCd == 1 ? 1 : 2);
+
+              results.add(TrainPosition(
+                subwayId: entry.value,
+                subwayName: SubwayColors.lineNames[entry.value] ?? '',
+                stationId: item['stationId']?.toString() ?? '',
+                stationName: (item['stationName']?.toString() ?? '').replaceAll('역', ''),
+                trainNo: 'N$trainNo', // N 접두사로 네이버 출처 구분
+                lastRecvDate: '',
+                recvTime: '',
+                direction: dir,
+                terminalId: '',
+                terminalName: item['heading']?.toString() ?? '',
+                trainStatus: trainStatus,
+                expressType: 0,
+                isLastTrain: false,
+              ));
+            }
+          }
+        } catch (_) {}
+      }
+    }
+    return results;
+  }
+
+  /// API에서 데이터 fetch (Live 모드, 전체 노선)
   Future<void> _fetchAndRender() async {
     _adjustInterval();
     if (!_isActive) return;
 
     try {
-      // API 전환 블렌딩: 현재 렌더링 중인 위치를 저장
-      _preApiPositions.clear();
-      for (final train in _currentTrains) {
-        _preApiPositions[train.trainNo] = _AnimPos3D(
-          train.lat, train.lng, train.altitude, train.isUnderground,
-        );
-      }
-
       final lineNames = _getSelectedLineApiNames();
       final allPositions = await _apiService.fetchAllTrainPositions(
         lineNames: lineNames,
@@ -546,18 +675,20 @@ class SubwayOverlayController {
         allTrains.addAll(positions);
       }
 
-      // 시뮬레이터에 스냅샷 저장 + 연속 보간 프리컴퓨트
+      // API가 빈 결과면 기존 시뮬 유지
+      if (allTrains.isEmpty && _currentTrains.isNotEmpty) {
+        debugPrint('[SubwayOverlay] ⚠️ API 빈 응답 — 기존 시뮬 유지');
+        _lastError = 'API 빈 응답 (기존 열차 유지중)';
+        return;
+      }
+
+      // 교정형 시뮬레이션: API 데이터로 속도 교정 (위치 리셋 아님)
       _simulator.updateApiSnapshot(allTrains);
       _simulator.prepareContinuousExtrapolation();
 
       _totalTrainCount = allTrains.length;
       _lastUpdate = DateTime.now();
       _lastError = null;
-
-      // 블렌딩 시작 (이전 위치 → 새 연속 보간 위치)
-      if (_preApiPositions.isNotEmpty) {
-        _apiTransitionStart = DateTime.now();
-      }
     } catch (e) {
       _lastError = e.toString();
       debugPrint('[SubwayOverlay] 🚨 fetch 실패: $e');
@@ -603,63 +734,16 @@ class SubwayOverlayController {
   void _renderLiveContinuous() {
     if (_mapController == null || !_simulator.hasContinuousData) return;
 
-    // 시뮬레이터에서 현재 프레임의 정밀 위치 계산
+    // 교정형 시뮬레이션: 매 프레임 물리 전진 (블렌딩 불필요)
     final framePositions = _simulator.getFramePositions();
     if (framePositions.isEmpty) return;
-
-    // API 전환 블렌딩: 새 API 데이터 수신 직후 부드러운 전환
-    double blendT = 1.0;
-    if (_apiTransitionStart != null) {
-      final elapsed =
-          DateTime.now().difference(_apiTransitionStart!).inMilliseconds / 1000.0;
-      if (elapsed < _apiTransitionDurationSec) {
-        blendT = _easeInOut((elapsed / _apiTransitionDurationSec).clamp(0.0, 1.0));
-      } else {
-        _apiTransitionStart = null;
-        _preApiPositions.clear();
-      }
-    }
 
     final filtered = <InterpolatedTrainPosition>[];
     for (final train in framePositions) {
       if (_selectedLines != null && !_selectedLines!.contains(train.subwayId)) {
         continue;
       }
-
-      double lat = train.lat;
-      double lng = train.lng;
-      double bearing = train.bearing;
-
-      // 블렌딩 중이면 이전 위치에서 부드럽게 전환
-      if (blendT < 1.0) {
-        final prev = _preApiPositions[train.trainNo];
-        if (prev != null) {
-          lat = _lerp(prev.lat, train.lat, blendT);
-          lng = _lerp(prev.lng, train.lng, blendT);
-          final dLat = train.lat - prev.lat;
-          final dLng = train.lng - prev.lng;
-          if (dLat.abs() > 1e-7 || dLng.abs() > 1e-7) {
-            bearing = _bearingFromDelta(dLat, dLng);
-          }
-        }
-      }
-
-      filtered.add(InterpolatedTrainPosition(
-        trainNo: train.trainNo,
-        subwayId: train.subwayId,
-        subwayName: train.subwayName,
-        lat: lat,
-        lng: lng,
-        altitude: 0,
-        isUnderground: train.isUnderground,
-        direction: train.direction,
-        terminalName: train.terminalName,
-        stationName: train.stationName,
-        trainStatus: train.trainStatus,
-        expressType: train.expressType,
-        isLastTrain: train.isLastTrain,
-        bearing: bearing,
-      ));
+      filtered.add(train);
     }
 
     _currentTrains = filtered;
@@ -825,63 +909,102 @@ class SubwayOverlayController {
     return nearest;
   }
 
-  /// 역 마커를 3D 스타일로 그리기 (MiniTokyo3D 스타일)
+  /// 역 마커를 MiniTokyo3D 스타일 필(pill)/캡슐로 그리기
+  /// 환승역: 노선 수만큼 컬러 도트가 나열된 캡슐 모양
+  /// 일반역: 단일 컬러 도트 (원형)
   Future<void> _drawStationMarkers() async {
     if (_mapController == null) return;
 
-    final stationData = <Map<String, dynamic>>[];
-    final addedNames = <String>{}; // 중복 방지 (환승역)
+    // ── 1단계: 역별 경유 노선 ID 목록 + 좌표 + 베어링 집계 ──
+    final stationLineIds = <String, List<String>>{}; // name → [lineId, ...]
+    final stationCoord = <String, List<double>>{};   // name → [lat, lng]
+    final stationBearing = <String, double>{};       // name → degrees
+
+    void collectStations(List<StationInfo> stations, String lineId, String routeKey) {
+      for (int i = 0; i < stations.length; i++) {
+        final s = stations[i];
+        stationLineIds.putIfAbsent(s.name, () => []);
+        if (!stationLineIds[s.name]!.contains(lineId)) {
+          stationLineIds[s.name]!.add(lineId);
+        }
+        if (!stationCoord.containsKey(s.name)) {
+          final snapped = _routeGeometry.getStationPosition(routeKey, s.name);
+          stationCoord[s.name] = [snapped?[0] ?? s.lat, snapped?[1] ?? s.lng];
+          // 인접역으로 베어링 계산 (캡슐 방향 결정)
+          if (stations.length >= 2) {
+            final pi = i > 0 ? i - 1 : i;
+            final ni = i < stations.length - 1 ? i + 1 : i;
+            final dLng = (stations[ni].lng - stations[pi].lng) * 3.14159 / 180;
+            final y = sin(dLng) * cos(stations[ni].lat * 3.14159 / 180);
+            final x = cos(stations[pi].lat * 3.14159 / 180) *
+                    sin(stations[ni].lat * 3.14159 / 180) -
+                sin(stations[pi].lat * 3.14159 / 180) *
+                    cos(stations[ni].lat * 3.14159 / 180) * cos(dLng);
+            stationBearing[s.name] = (atan2(y, x) * 180 / 3.14159 + 360) % 360;
+          }
+        }
+      }
+    }
 
     for (final entry in SeoulSubwayData.lineIdToApiName.entries) {
       final lineId = entry.key;
       if (_selectedLines != null && !_selectedLines!.contains(lineId)) continue;
-
-      final stations = SeoulSubwayData.getLineStations(lineId);
-      final color = SubwayColors.getColor(lineId);
-      final colorStr = 'rgba(${(color.r * 255).round()},${(color.g * 255).round()},${(color.b * 255).round()},1)';
-
-      for (final station in stations) {
-        if (addedNames.contains(station.name)) continue;
-        addedNames.add(station.name);
-
-        // OSM 경로에 스냅된 좌표 사용 (없으면 원래 좌표)
-        final snapped = _routeGeometry.getStationPosition(lineId, station.name);
-        stationData.add({
-          'lat': snapped?[0] ?? station.lat,
-          'lng': snapped?[1] ?? station.lng,
-          'name': station.name,
-          'color': colorStr,
-          'isTransfer': station.transferLines.isNotEmpty,
-        });
-      }
+      collectStations(SeoulSubwayData.getLineStations(lineId), lineId, lineId);
     }
-
-    // 지선(branch) 역도 추가
     for (final branchEntry in SeoulSubwayData.branchToLineId.entries) {
-      final branchKey = branchEntry.key;
       final parentLineId = branchEntry.value;
       if (_selectedLines != null && !_selectedLines!.contains(parentLineId)) continue;
+      collectStations(
+        SeoulSubwayData.getBranchStations(branchEntry.key),
+        parentLineId, branchEntry.key,
+      );
+    }
 
-      final branchStations = SeoulSubwayData.getBranchStations(branchKey);
-      final color = SubwayColors.getColor(parentLineId);
-      final colorStr = 'rgba(${(color.r * 255).round()},${(color.g * 255).round()},${(color.b * 255).round()},1)';
+    // ── 2단계: 캡슐(pill) + 도트(dot) 데이터 생성 ──
+    const slotMeters = 40.0; // 도트 간격 (미터)
+    const degPerMeterLat = 1.0 / 111320.0;
+    final degPerMeterLng = 1.0 / (111320.0 * cos(37.55 * 3.14159 / 180));
 
-      for (final station in branchStations) {
-        if (addedNames.contains(station.name)) continue;
-        addedNames.add(station.name);
+    final pills = <Map<String, dynamic>>[];
+    final dots = <Map<String, dynamic>>[];
 
-        final snapped = _routeGeometry.getStationPosition(branchKey, station.name);
-        stationData.add({
-          'lat': snapped?[0] ?? station.lat,
-          'lng': snapped?[1] ?? station.lng,
-          'name': station.name,
-          'color': colorStr,
-          'isTransfer': station.transferLines.isNotEmpty,
+    for (final name in stationCoord.keys) {
+      final coord = stationCoord[name]!;
+      final lines = stationLineIds[name] ?? [];
+      final n = lines.length;
+      final bearing = stationBearing[name] ?? 0.0;
+
+      // 캡슐 연장 방향 = 노선 진행 방향의 수직
+      final perpRad = (bearing + 90) * 3.14159 / 180;
+      final dLat = slotMeters * cos(perpRad) * degPerMeterLat;
+      final dLng = slotMeters * sin(perpRad) * degPerMeterLng;
+
+      final half = (n - 1) / 2.0;
+
+      // 캡슐 배경 (LineString 양 끝점)
+      pills.add({
+        'name': name,
+        'lineCount': n,
+        'startLat': coord[0] - half * dLat,
+        'startLng': coord[1] - half * dLng,
+        'endLat': coord[0] + half * dLat,
+        'endLng': coord[1] + half * dLng,
+      });
+
+      // 노선별 컬러 도트
+      for (int i = 0; i < n; i++) {
+        final offset = i - half;
+        final color = SubwayColors.getColor(lines[i]);
+        dots.add({
+          'lat': coord[0] + offset * dLat,
+          'lng': coord[1] + offset * dLng,
+          'name': name,
+          'color': 'rgba(${(color.r * 255).round()},${(color.g * 255).round()},${(color.b * 255).round()},1)',
         });
       }
     }
 
-    await _mapController!.updateStations3D(stationData);
+    await _mapController!.updateStations3D(pills, dots);
   }
 
   /// 모든 오버레이 제거

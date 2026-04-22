@@ -69,8 +69,9 @@ abstract class IMapController {
   Future<void> initRoutes3D(Map<String, List<List<double>>> routeCoordinates,
       Map<String, Color> lineColors, Map<String, List<bool>> segmentUnderground) async {}
 
-  /// 3D 역 마커 업데이트 (줌 반응형 MiniTokyo3D 스타일)
-  Future<void> updateStations3D(List<Map<String, dynamic>> stations) async {}
+  /// 3D 역 마커 업데이트 (MiniTokyo3D 스타일 필/캡슐 마커)
+  /// [pills] 역별 캡슐 배경 (LineString), [dots] 노선별 컬러 도트 (Point)
+  Future<void> updateStations3D(List<Map<String, dynamic>> pills, List<Map<String, dynamic>> dots) async {}
 
   /// 지하 구간 표시 토글
   void setUndergroundVisible(bool visible) {}

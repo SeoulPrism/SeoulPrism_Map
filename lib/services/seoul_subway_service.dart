@@ -20,7 +20,8 @@ class SeoulSubwayService {
   static const List<String> allLineNames = [
     '1호선', '2호선', '3호선', '4호선', '5호선',
     '6호선', '7호선', '8호선', '9호선',
-    '경의중앙선', '공항철도', '경춘선', '수인분당선', '신분당선', '우이신설선',
+    '경의중앙선', '공항철도', '경춘선', '수인분당선', '신분당선', '우이신설선', 'GTX-A',
+    '서해선', '신림선', '경강선',
   ];
 
   String get _apiKey => ApiKeys.seoulApiKey;
@@ -86,7 +87,7 @@ class SeoulSubwayService {
       throw SeoulApiException('일일 API 호출 한도($dailyLimit건) 소진', code: 'LIMIT');
     }
 
-    final url = '$_baseUrl/$_apiKey/json/realtimePosition/0/100/$lineName';
+    final url = '$_baseUrl/$_apiKey/json/realtimePosition/0/200/$lineName';
     try {
       _incrementCallCount();
       final response = await http.get(Uri.parse(url)).timeout(
@@ -429,6 +430,10 @@ class SeoulSubwayService {
     '1009': '9호선', '1063': '경의중앙선', '1065': '공항철도',
     '1067': '경춘선', '1075': '수인분당선', '1077': '신분당선',
     '1092': '우이신설선',
+    '1032': 'GTX-A',
+    '1093': '서해선',
+    '1094': '신림선',
+    '1081': '경강선',
   };
 
   /// 시간표 기준 배차간격 (초) 반환
@@ -454,6 +459,10 @@ class SeoulSubwayService {
       '1075': [300, 480, 600],   // 수인분당선: 5/8/10분
       '1077': [300, 420, 540],   // 신분당선: 5/7/9분
       '1092': [360, 480, 600],   // 우이신설선: 6/8/10분
+      '1032': [300, 480, 600],   // GTX-A: 5/8/10분
+      '1093': [360, 600, 900],   // 서해선: 6/10/15분
+      '1094': [240, 360, 480],   // 신림선: 4/6/8분
+      '1081': [420, 720, 900],   // 경강선: 7/12/15분
     };
 
     final h = headways[subwayId] ?? [300, 480, 600]; // 기본 5/8/10분
