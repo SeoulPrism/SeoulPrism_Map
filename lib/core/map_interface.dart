@@ -94,6 +94,9 @@ abstract class IMapController {
   /// 열차 선택 해제 시 호출 — 맵 빈 곳 탭 (Mapbox only)
   void setOnMapTappedEmpty(VoidCallback? callback) {}
 
+  /// 맵 어디든 탭 시 호출 (키보드 dismiss 등 용도)
+  void setOnAnyMapTap(VoidCallback? callback) {}
+
   /// 선택된 열차 번호 설정 (하이라이트 표시용)
   void setSelectedTrain(String? trainNo) {}
 
@@ -112,6 +115,12 @@ abstract class IMapController {
   /// 지연/장애 노선에 방어막(쉴드) 효과 표시 (MiniTokyo3D 스타일)
   /// [delayInfo] 지연 노선 ID → 지연 분 수 (e.g., {'1002': 5, '1004': 12})
   Future<void> updateDelayShield3D(Map<String, int> delayInfo) async {}
+
+  /// 혼잡도 히트맵 업데이트 (역 좌표 + 가중치)
+  Future<void> updateCongestionHeatmap(List<Map<String, dynamic>> points) async {}
+
+  /// 혼잡도 히트맵 표시/숨김
+  void setCongestionVisible(bool visible) {}
 }
 
 class CameraInfo {

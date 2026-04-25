@@ -56,6 +56,8 @@ class TrainPosition {
   final int trainStatus;      // 0:진입, 1:도착, 2:출발, 3:전역출발
   final int expressType;      // 1:급행, 0:일반, 7:특급
   final bool isLastTrain;     // 막차 여부
+  final int prevDepartureMs;  // 이전역 출발 시각 (epoch ms, 0=미제공)
+  final int eventTimeMs;      // 이벤트 발생 시각 (epoch ms, 0=미제공)
 
   const TrainPosition({
     required this.subwayId,
@@ -71,6 +73,8 @@ class TrainPosition {
     required this.trainStatus,
     required this.expressType,
     required this.isLastTrain,
+    this.prevDepartureMs = 0,
+    this.eventTimeMs = 0,
   });
 
   factory TrainPosition.fromJson(Map<String, dynamic> json) {
@@ -285,6 +289,7 @@ class InterpolatedTrainPosition {
   final int expressType;
   final bool isLastTrain;
   final double bearing; // 열차 진행 방향 (지도 베어링)
+  final double opacity; // 열차 투명도 (0.0~1.0, 텔레포트 페이드인용)
 
   const InterpolatedTrainPosition({
     required this.trainNo,
@@ -301,6 +306,7 @@ class InterpolatedTrainPosition {
     required this.expressType,
     required this.isLastTrain,
     required this.bearing,
+    this.opacity = 1.0,
   });
 
   /// 상태 텍스트
@@ -468,10 +474,20 @@ class TrainSegment {
   final double decelTimeMs; // 감속 구간 시간 (ms)
   final double cruiseSpeed; // 순항 속도 (정규화 단위/ms)
 
-  // 지연 오프셋 (세그먼트 생성 시 설정)
+  // 지연 오프셋 (매 프레임 targetDelayMs를 향해 0.5%씩 이동)
   int delayMs;
-  // 다음 역 정차에서 적용할 보정 (양수=더 오래 정차, 음수=빨리 출발)
+  // API가 설정하는 목표 delay
+  int targetDelayMs;
+  // 다음 역 정차에서 적용할 보정
   int pendingCorrectionMs;
+
+  // API 상태 고정 (짧은 보간 세그먼트에서 상태 깜빡임 방지)
+  int? fixedStatus;         // null이면 progress 기반, 값 있으면 고정
+  String? fixedStationName; // 고정 역명
+
+  // 텔레포트 페이드인: 텔레포트 시점 (ms), 0이면 텔레포트 안 함
+  int teleportAtMs = 0;
+  static const int teleportFadeMs = 800; // 페이드인 시간
 
   // 역 목록 (다음 구간 생성용)
   final int fromStationIdx;
@@ -498,6 +514,7 @@ class TrainSegment {
     required this.decelTimeMs,
     required this.cruiseSpeed,
     this.delayMs = 0,
+    this.targetDelayMs = 0,
     this.pendingCorrectionMs = 0,
     required this.fromStationIdx,
     required this.toStationIdx,
@@ -545,6 +562,7 @@ class TrainSegment {
 
   /// 현재 표시할 상태 코드
   int displayStatus(int nowMs) {
+    if (fixedStatus != null) return fixedStatus!;
     final t = progress(nowMs);
     if (t >= 1.0) return 1; // 정차중
     if (t < 0.15) return 2; // 출발
@@ -554,7 +572,19 @@ class TrainSegment {
 
   /// 현재 표시할 역명
   String displayStation(int nowMs) {
+    if (fixedStationName != null) return fixedStationName!;
     return progress(nowMs) > 0.5 ? endStationName : startStationName;
+  }
+
+  /// 텔레포트 후 페이드인 opacity (0→1, 800ms)
+  double displayOpacity(int nowMs) {
+    if (teleportAtMs == 0) return 1.0;
+    final elapsed = nowMs - teleportAtMs;
+    if (elapsed >= teleportFadeMs) {
+      teleportAtMs = 0; // 페이드인 완료
+      return 1.0;
+    }
+    return (elapsed / teleportFadeMs).clamp(0.0, 1.0);
   }
 
   /// 팩토리: 소요시간(ms) + 거리(m) → 가감속 파라미터 자동 계산

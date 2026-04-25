@@ -181,7 +181,22 @@ class SeoulSubwayService {
   // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   /// 특정 역의 실시간 도착 정보 조회
   Future<List<ArrivalInfo>> fetchStationArrivals(String stationName) async {
-    final url = '$_baseUrl/$_apiKey/json/realtimeStationArrival/0/20/$stationName';
+    // 1차: 원본 이름으로 시도
+    var result = await _fetchArrivals(stationName);
+    if (result.isNotEmpty) return result;
+
+    // 2차: 괄호 제거 후 시도 (e.g. "총신대입구(이수)" → "총신대입구")
+    final withoutParen = stationName.replaceAll(RegExp(r'\([^)]*\)'), '').trim();
+    if (withoutParen != stationName) {
+      result = await _fetchArrivals(withoutParen);
+      if (result.isNotEmpty) return result;
+    }
+
+    return [];
+  }
+
+  Future<List<ArrivalInfo>> _fetchArrivals(String name) async {
+    final url = '$_baseUrl/$_apiKey/json/realtimeStationArrival/0/20/$name';
     try {
       final response = await http.get(Uri.parse(url)).timeout(
         const Duration(seconds: 10),
@@ -196,7 +211,7 @@ class SeoulSubwayService {
       return [];
     } catch (e) {
       if (e is SeoulApiException) rethrow;
-      throw SeoulApiException('도착정보 조회 실패: $e', code: 'ARRIVAL');
+      return [];
     }
   }
 

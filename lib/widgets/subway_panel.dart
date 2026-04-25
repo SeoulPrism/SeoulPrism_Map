@@ -3,7 +3,13 @@ import '../models/subway_models.dart';
 import '../data/seoul_subway_data.dart';
 import '../core/api_keys.dart';
 import '../services/seoul_subway_service.dart';
+import '../theme/app_colors.dart';
+import '../theme/app_typography.dart';
+import '../theme/app_spacing.dart';
+import 'app_badge.dart';
 import 'subway_overlay.dart';
+import '../services/congestion_service.dart';
+import '../services/closure_service.dart';
 
 /// 지하철 실시간 정보 제어 패널 (접기/펼치기 지원)
 class SubwayControlPanel extends StatefulWidget {
@@ -26,11 +32,11 @@ class _SubwayControlPanelState extends State<SubwayControlPanel> {
   @override
   Widget build(BuildContext context) {
     return Card(
-      color: Colors.black.withValues(alpha: 0.9),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      color: AppColors.surface.withValues(alpha: 0.9),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppSpacing.md)),
       child: Container(
         width: 220,
-        padding: const EdgeInsets.all(12),
+        padding: const EdgeInsets.all(AppSpacing.md),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           mainAxisSize: MainAxisSize.min,
@@ -38,14 +44,14 @@ class _SubwayControlPanelState extends State<SubwayControlPanel> {
             _buildHeader(),
             if (!_isCollapsed) ...[
               if (widget.controller.trainDelays.isNotEmpty) ...[
-                const Divider(height: 16, color: Colors.white10),
+                Divider(height: AppSpacing.lg, color: AppColors.divider),
                 _buildDelayAlertBanner(),
               ],
-              const Divider(height: 16, color: Colors.white10),
+              Divider(height: AppSpacing.lg, color: AppColors.divider),
               _buildStatusInfo(),
-              const Divider(height: 16, color: Colors.white10),
+              Divider(height: AppSpacing.lg, color: AppColors.divider),
               _buildToggles(),
-              const Divider(height: 16, color: Colors.white10),
+              Divider(height: AppSpacing.lg, color: AppColors.divider),
               _buildLineFilter(),
             ],
           ],
@@ -59,10 +65,10 @@ class _SubwayControlPanelState extends State<SubwayControlPanel> {
       children: [
         Icon(
           Icons.train,
-          color: widget.controller.isActive ? Colors.greenAccent : Colors.grey,
+          color: widget.controller.isActive ? AppColors.success : Colors.grey,
           size: 18,
         ),
-        const SizedBox(width: 8),
+        const SizedBox(width: AppSpacing.sm),
         GestureDetector(
           onTap: () {
             // 모드 토글: DEMO ↔ LIVE
@@ -74,26 +80,29 @@ class _SubwayControlPanelState extends State<SubwayControlPanel> {
           },
           child: Text(
             widget.controller.mode == SubwayMode.demo ? 'DEMO' : 'LIVE',
-            style: TextStyle(
+            style: AppTypography.bodySm.copyWith(
               fontWeight: FontWeight.bold,
-              fontSize: 12,
               color: widget.controller.mode == SubwayMode.demo
-                  ? Colors.orangeAccent
-                  : Colors.white,
+                  ? AppColors.warning
+                  : AppColors.textPrimary,
               letterSpacing: 1.2,
             ),
           ),
         ),
         const Spacer(),
-        GestureDetector(
-          onTap: () => setState(() => _isCollapsed = !_isCollapsed),
-          child: Icon(
-            _isCollapsed ? Icons.expand_more : Icons.expand_less,
-            color: Colors.white54,
-            size: 20,
+        Semantics(
+          label: _isCollapsed ? '패널 펼치기' : '패널 접기',
+          button: true,
+          child: GestureDetector(
+            onTap: () => setState(() => _isCollapsed = !_isCollapsed),
+            child: Icon(
+              _isCollapsed ? Icons.expand_more : Icons.expand_less,
+              color: AppColors.textTertiary,
+              size: AppSpacing.xl,
+            ),
           ),
         ),
-        const SizedBox(width: 4),
+        const SizedBox(width: AppSpacing.xs),
         _PowerButton(
           isActive: widget.controller.isActive,
           onPressed: () {
@@ -122,26 +131,24 @@ class _SubwayControlPanelState extends State<SubwayControlPanel> {
           children: [
             Container(
               width: 6, height: 6,
-              decoration: const BoxDecoration(
-                color: Colors.redAccent,
+              decoration: BoxDecoration(
+                color: AppColors.danger,
                 shape: BoxShape.circle,
-                boxShadow: [BoxShadow(color: Colors.redAccent, blurRadius: 4)],
+                boxShadow: [BoxShadow(color: AppColors.danger, blurRadius: 4)],
               ),
             ),
-            const SizedBox(width: 6),
+            const SizedBox(width: AppSpacing.sm),
             Text(
               '지연 열차 ${delays.length}대',
-              style: const TextStyle(
-                fontSize: 10,
+              style: AppTypography.caption.copyWith(
                 fontWeight: FontWeight.bold,
-                color: Colors.redAccent,
+                color: AppColors.danger,
               ),
             ),
           ],
         ),
-        const SizedBox(height: 4),
+        const SizedBox(height: AppSpacing.xs),
         ...sorted.take(4).map((entry) {
-          // 열차번호로 현재 열차 정보 찾기
           final train = widget.controller.currentTrains
               .where((t) => t.trainNo == entry.key)
               .firstOrNull;
@@ -156,39 +163,36 @@ class _SubwayControlPanelState extends State<SubwayControlPanel> {
             padding: const EdgeInsets.only(bottom: 3),
             child: Row(
               children: [
-                // 노선 태그
                 if (lineName.isNotEmpty) ...[
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                    padding: const EdgeInsets.symmetric(horizontal: AppSpacing.xs, vertical: 1),
                     decoration: BoxDecoration(
                       color: lineColor.withValues(alpha: 0.3),
                       borderRadius: BorderRadius.circular(3),
                       border: Border.all(color: lineColor, width: 0.5),
                     ),
                     child: Text(lineName,
-                      style: const TextStyle(fontSize: 7, color: Colors.white)),
+                      style: AppTypography.caption.copyWith(color: AppColors.textPrimary)),
                   ),
-                  const SizedBox(width: 4),
+                  const SizedBox(width: AppSpacing.xs),
                 ],
-                // 지연 시간 뱃지
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                  padding: const EdgeInsets.symmetric(horizontal: AppSpacing.xs, vertical: 1),
                   decoration: BoxDecoration(
-                    color: Colors.redAccent.withValues(alpha: 0.25),
+                    color: AppColors.danger.withValues(alpha: 0.25),
                     borderRadius: BorderRadius.circular(3),
-                    border: Border.all(color: Colors.redAccent, width: 0.5),
+                    border: Border.all(color: AppColors.danger, width: 0.5),
                   ),
                   child: Text('${entry.value}분',
-                    style: const TextStyle(
-                      fontSize: 8, fontWeight: FontWeight.bold,
-                      color: Colors.redAccent)),
+                    style: AppTypography.caption.copyWith(
+                      fontWeight: FontWeight.bold,
+                      color: AppColors.danger)),
                 ),
-                const SizedBox(width: 4),
-                // 열차번호 + 현재 역
+                const SizedBox(width: AppSpacing.xs),
                 Expanded(
                   child: Text(
                     '${entry.key}${train != null ? ' · ${train.stationName}' : ''}',
-                    style: const TextStyle(fontSize: 8, color: Colors.white70),
+                    style: AppTypography.caption.copyWith(color: AppColors.textSecondary),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                   ),
@@ -200,7 +204,7 @@ class _SubwayControlPanelState extends State<SubwayControlPanel> {
         if (sorted.length > 4)
           Text(
             '외 ${sorted.length - 4}대...',
-            style: const TextStyle(fontSize: 7, color: Colors.white38),
+            style: AppTypography.caption.copyWith(color: AppColors.textDisabled),
           ),
       ],
     );
@@ -208,9 +212,9 @@ class _SubwayControlPanelState extends State<SubwayControlPanel> {
 
   Widget _buildStatusInfo() {
     if (!widget.controller.isActive) {
-      return const Text(
+      return Text(
         'OFF - 탭하여 시작',
-        style: TextStyle(fontSize: 10, color: Colors.grey),
+        style: AppTypography.caption.copyWith(color: Colors.grey),
       );
     }
 
@@ -227,10 +231,10 @@ class _SubwayControlPanelState extends State<SubwayControlPanel> {
           _infoRow('갱신', _formatTime(widget.controller.lastUpdate!)),
         if (widget.controller.lastError != null)
           Padding(
-            padding: const EdgeInsets.only(top: 4),
+            padding: const EdgeInsets.only(top: AppSpacing.xs),
             child: Text(
               widget.controller.lastError!,
-              style: const TextStyle(fontSize: 8, color: Colors.redAccent),
+              style: AppTypography.caption.copyWith(color: AppColors.danger),
               maxLines: 2,
               overflow: TextOverflow.ellipsis,
             ),
@@ -254,6 +258,10 @@ class _SubwayControlPanelState extends State<SubwayControlPanel> {
           widget.controller.toggleStations(v);
           widget.onRefresh();
         }),
+        _toggleRow('혼잡도', widget.controller.showCongestion, (v) {
+          widget.controller.setCongestionVisible(v);
+          widget.onRefresh();
+        }),
       ],
     );
   }
@@ -264,21 +272,21 @@ class _SubwayControlPanelState extends State<SubwayControlPanel> {
       children: [
         Row(
           children: [
-            const Text('노선 필터', style: TextStyle(fontSize: 9, color: Colors.grey)),
+            Text('노선 필터', style: AppTypography.caption.copyWith(color: Colors.grey)),
             const Spacer(),
             GestureDetector(
               onTap: () {
                 widget.controller.setLineFilter(null);
                 widget.onRefresh();
               },
-              child: const Text('전체', style: TextStyle(fontSize: 9, color: Colors.blueAccent)),
+              child: Text('전체', style: AppTypography.caption.copyWith(color: AppColors.accent)),
             ),
           ],
         ),
-        const SizedBox(height: 6),
+        const SizedBox(height: AppSpacing.sm),
         Wrap(
-          spacing: 4,
-          runSpacing: 4,
+          spacing: AppSpacing.xs,
+          runSpacing: AppSpacing.xs,
           children: SubwayColors.lineColors.entries.map((entry) {
             final lineId = entry.key;
             final color = entry.value;
@@ -286,7 +294,10 @@ class _SubwayControlPanelState extends State<SubwayControlPanel> {
             final isSelected = widget.controller.selectedLines == null ||
                 widget.controller.selectedLines!.contains(lineId);
 
-            return GestureDetector(
+            return AppFilterChip(
+              label: name,
+              color: color,
+              isSelected: isSelected,
               onTap: () {
                 final current = widget.controller.selectedLines ??
                     Set<String>.from(SubwayColors.lineColors.keys);
@@ -298,25 +309,6 @@ class _SubwayControlPanelState extends State<SubwayControlPanel> {
                 widget.controller.setLineFilter(current.isEmpty ? null : current);
                 widget.onRefresh();
               },
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                decoration: BoxDecoration(
-                  color: isSelected ? color.withValues(alpha: 0.3) : Colors.transparent,
-                  border: Border.all(
-                    color: isSelected ? color : Colors.white12,
-                    width: 1,
-                  ),
-                  borderRadius: BorderRadius.circular(4),
-                ),
-                child: Text(
-                  name,
-                  style: TextStyle(
-                    fontSize: 8,
-                    color: isSelected ? color : Colors.grey,
-                    fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-                  ),
-                ),
-              ),
             );
           }).toList(),
         ),
@@ -330,8 +322,8 @@ class _SubwayControlPanelState extends State<SubwayControlPanel> {
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          Text(label, style: const TextStyle(fontSize: 9, color: Colors.grey)),
-          Text(value, style: const TextStyle(fontSize: 9, color: Colors.white)),
+          Text(label, style: AppTypography.caption.copyWith(color: Colors.grey)),
+          Text(value, style: AppTypography.caption.copyWith(color: AppColors.textPrimary)),
         ],
       ),
     );
@@ -343,13 +335,13 @@ class _SubwayControlPanelState extends State<SubwayControlPanel> {
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          Text(label, style: const TextStyle(fontSize: 10, color: Colors.white70)),
+          Text(label, style: AppTypography.caption.copyWith(color: AppColors.textSecondary)),
           Transform.scale(
             scale: 0.7,
             child: Switch.adaptive(
               value: value,
               onChanged: onChanged,
-              activeColor: Colors.greenAccent,
+              activeColor: AppColors.success,
             ),
           ),
         ],
@@ -370,25 +362,14 @@ class _PowerButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
+    return AppCircleButton(
+      icon: Icons.power_settings_new,
       onTap: onPressed,
-      child: Container(
-        width: 28,
-        height: 28,
-        decoration: BoxDecoration(
-          shape: BoxShape.circle,
-          color: isActive ? Colors.greenAccent.withOpacity(0.2) : Colors.white10,
-          border: Border.all(
-            color: isActive ? Colors.greenAccent : Colors.grey,
-            width: 1.5,
-          ),
-        ),
-        child: Icon(
-          Icons.power_settings_new,
-          size: 14,
-          color: isActive ? Colors.greenAccent : Colors.grey,
-        ),
-      ),
+      semanticLabel: isActive ? '지하철 시각화 끄기' : '지하철 시각화 켜기',
+      size: AppSpacing.buttonSm,
+      iconSize: 14,
+      color: isActive ? AppColors.success.withValues(alpha: 0.2) : AppColors.surfaceOverlay,
+      borderColor: isActive ? AppColors.success : Colors.grey,
     );
   }
 }
@@ -409,28 +390,24 @@ class StationArrivalPanel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Card(
-      color: Colors.black.withOpacity(0.95),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      color: AppColors.surface.withValues(alpha: 0.95),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppSpacing.md)),
       child: Container(
         width: 300,
         constraints: const BoxConstraints(maxHeight: 400),
-        padding: const EdgeInsets.all(12),
+        padding: const EdgeInsets.all(AppSpacing.md),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             // 헤더
             Row(
               children: [
-                const Icon(Icons.info_outline, color: Colors.blueAccent, size: 16),
-                const SizedBox(width: 8),
+                Icon(Icons.info_outline, color: AppColors.accent, size: AppSpacing.lg),
+                const SizedBox(width: AppSpacing.sm),
                 Expanded(
                   child: Text(
                     stationName,
-                    style: const TextStyle(
-                      fontWeight: FontWeight.bold,
-                      fontSize: 14,
-                      color: Colors.white,
-                    ),
+                    style: AppTypography.bodyMd.copyWith(fontWeight: FontWeight.bold),
                   ),
                 ),
                 IconButton(
@@ -441,13 +418,13 @@ class StationArrivalPanel extends StatelessWidget {
                 ),
               ],
             ),
-            const Divider(height: 12, color: Colors.white10),
+            Divider(height: AppSpacing.md, color: AppColors.divider),
 
             // 도착 정보 목록
             if (arrivals.isEmpty)
-              const Padding(
-                padding: EdgeInsets.all(16),
-                child: Text('도착 정보 없음', style: TextStyle(color: Colors.grey, fontSize: 11)),
+              Padding(
+                padding: const EdgeInsets.all(AppSpacing.lg),
+                child: Text('도착 정보 없음', style: AppTypography.bodySm.copyWith(color: Colors.grey)),
               )
             else
               Flexible(
@@ -469,49 +446,46 @@ class StationArrivalPanel extends StatelessWidget {
 
   Widget _buildArrivalRow(ArrivalInfo info, Color lineColor) {
     return Container(
-      margin: const EdgeInsets.only(bottom: 6),
-      padding: const EdgeInsets.all(8),
+      margin: const EdgeInsets.only(bottom: AppSpacing.sm),
+      padding: const EdgeInsets.all(AppSpacing.sm),
       decoration: BoxDecoration(
-        color: lineColor.withOpacity(0.1),
-        borderRadius: BorderRadius.circular(6),
+        color: lineColor.withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(AppSpacing.sm),
         border: Border(left: BorderSide(color: lineColor, width: 3)),
       ),
       child: Row(
         children: [
-          // 방면 정보
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
                   info.trainLineName,
-                  style: const TextStyle(fontSize: 11, color: Colors.white),
+                  style: AppTypography.bodySm.copyWith(color: AppColors.textPrimary),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
                 const SizedBox(height: 2),
                 Text(
                   '${info.destinationName}행 ${info.trainType}',
-                  style: const TextStyle(fontSize: 9, color: Colors.grey),
+                  style: AppTypography.caption.copyWith(color: Colors.grey),
                 ),
               ],
             ),
           ),
-          // 도착 메시지
           Column(
             crossAxisAlignment: CrossAxisAlignment.end,
             children: [
               Text(
                 info.arrivalMsg,
-                style: TextStyle(
-                  fontSize: 11,
+                style: AppTypography.bodySm.copyWith(
                   fontWeight: FontWeight.bold,
-                  color: info.arrivalSeconds <= 60 ? Colors.redAccent : Colors.greenAccent,
+                  color: info.arrivalSeconds <= 60 ? AppColors.danger : AppColors.success,
                 ),
               ),
               Text(
                 info.arrivalCodeText,
-                style: const TextStyle(fontSize: 8, color: Colors.grey),
+                style: AppTypography.caption.copyWith(color: Colors.grey),
               ),
             ],
           ),
@@ -565,29 +539,24 @@ class TrainDetailPanel extends StatelessWidget {
 
     return Container(
       width: double.infinity,
-      margin: const EdgeInsets.symmetric(horizontal: 12),
+      margin: const EdgeInsets.symmetric(horizontal: AppSpacing.md),
       decoration: BoxDecoration(
-        color: const Color(0xF01A1A2E),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: lineColor.withOpacity(0.4), width: 1),
-        boxShadow: [
-          BoxShadow(
-            color: lineColor.withOpacity(0.15),
-            blurRadius: 20,
-            offset: const Offset(0, -4),
-          ),
-        ],
+        color: AppColors.surfaceCard.withValues(alpha: 0.94),
+        borderRadius: BorderRadius.circular(AppSpacing.xl),
+        border: Border.all(color: lineColor.withValues(alpha: 0.4), width: 1),
       ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(AppSpacing.xl),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
         children: [
           // ── 헤더: 노선명 + 열차 종류 + 방향 ──
           Container(
             width: double.infinity,
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            padding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg, vertical: AppSpacing.md),
             decoration: BoxDecoration(
-              color: lineColor.withOpacity(0.15),
-              borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
+              color: lineColor.withValues(alpha: 0.15),
+              borderRadius: const BorderRadius.vertical(top: Radius.circular(AppSpacing.xl)),
             ),
             child: Row(
               children: [
@@ -602,15 +571,14 @@ class TrainDetailPanel extends StatelessWidget {
                   child: Center(
                     child: Text(
                       _lineShortName(train.subwayId),
-                      style: const TextStyle(
-                        fontSize: 13,
+                      style: AppTypography.bodySm.copyWith(
                         fontWeight: FontWeight.w900,
-                        color: Colors.white,
+                        color: AppColors.textPrimary,
                       ),
                     ),
                   ),
                 ),
-                const SizedBox(width: 12),
+                const SizedBox(width: AppSpacing.md),
                 // 노선 + 방향 정보
                 Expanded(
                   child: Column(
@@ -618,31 +586,26 @@ class TrainDetailPanel extends StatelessWidget {
                     children: [
                       Text(
                         lineName,
-                        style: TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.bold,
-                          color: lineColor,
-                        ),
+                        style: AppTypography.titleMd.copyWith(color: lineColor),
                       ),
                       const SizedBox(height: 2),
                       Row(
                         children: [
                           Text(
                             trainTypeText,
-                            style: TextStyle(
-                              fontSize: 12,
+                            style: AppTypography.bodySm.copyWith(
                               color: train.expressType == 1
-                                  ? Colors.orangeAccent
-                                  : Colors.white70,
+                                  ? AppColors.warning
+                                  : AppColors.textSecondary,
                               fontWeight: train.expressType == 1
                                   ? FontWeight.bold
                                   : FontWeight.normal,
                             ),
                           ),
-                          const SizedBox(width: 6),
+                          const SizedBox(width: AppSpacing.sm),
                           Text(
                             '($directionText)',
-                            style: const TextStyle(fontSize: 12, color: Colors.white54),
+                            style: AppTypography.bodySm.copyWith(color: AppColors.textTertiary),
                           ),
                         ],
                       ),
@@ -650,17 +613,10 @@ class TrainDetailPanel extends StatelessWidget {
                   ),
                 ),
                 // 닫기 버튼
-                GestureDetector(
-                  onTap: onClose,
-                  child: Container(
-                    width: 32,
-                    height: 32,
-                    decoration: BoxDecoration(
-                      color: Colors.white10,
-                      shape: BoxShape.circle,
-                    ),
-                    child: const Icon(Icons.close, size: 16, color: Colors.white54),
-                  ),
+                AppCircleButton(
+                  icon: Icons.close,
+                  onTap: onClose ?? () {},
+                  semanticLabel: '열차 상세 닫기',
                 ),
               ],
             ),
@@ -668,53 +624,34 @@ class TrainDetailPanel extends StatelessWidget {
 
           // ── 열차 번호 + 상태 태그 ──
           Padding(
-            padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
+            padding: const EdgeInsets.fromLTRB(AppSpacing.lg, AppSpacing.md, AppSpacing.lg, 0),
             child: Row(
               children: [
                 Icon(Icons.train, size: 14, color: lineColor),
-                const SizedBox(width: 6),
+                const SizedBox(width: AppSpacing.sm),
                 Text(
                   '열차 #${train.trainNo}',
-                  style: const TextStyle(fontSize: 12, color: Colors.white, fontWeight: FontWeight.w600),
+                  style: AppTypography.bodySm.copyWith(fontWeight: FontWeight.w600),
                 ),
-                const SizedBox(width: 8),
+                const SizedBox(width: AppSpacing.sm),
                 _statusChip(train.trainStatus, lineColor),
                 if (delayMinutes >= 2) ...[
-                  const SizedBox(width: 6),
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                    decoration: BoxDecoration(
-                      color: Colors.redAccent.withOpacity(0.2),
-                      borderRadius: BorderRadius.circular(4),
-                      border: Border.all(color: Colors.redAccent.withOpacity(0.5)),
-                    ),
-                    child: Text(
-                      '$delayMinutes분 지연',
-                      style: const TextStyle(fontSize: 9, color: Colors.redAccent, fontWeight: FontWeight.bold),
-                    ),
-                  ),
+                  const SizedBox(width: AppSpacing.sm),
+                  AppBadge(text: '$delayMinutes분 지연', color: AppColors.danger),
                 ],
                 if (train.isLastTrain) ...[
-                  const SizedBox(width: 6),
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                    decoration: BoxDecoration(
-                      color: Colors.redAccent.withOpacity(0.2),
-                      borderRadius: BorderRadius.circular(4),
-                      border: Border.all(color: Colors.redAccent.withOpacity(0.5)),
-                    ),
-                    child: const Text('막차', style: TextStyle(fontSize: 9, color: Colors.redAccent, fontWeight: FontWeight.bold)),
-                  ),
+                  const SizedBox(width: AppSpacing.sm),
+                  AppBadge(text: '막차', color: AppColors.danger),
                 ],
               ],
             ),
           ),
 
-          const SizedBox(height: 12),
+          const SizedBox(height: AppSpacing.md),
 
           // ── 역 진행 표시 (이전역 → 현재역 → 다음역) ──
           Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
+            padding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg),
             child: _buildStationProgress(
               prevStation: prevStation,
               currentStation: currentStation,
@@ -724,23 +661,24 @@ class TrainDetailPanel extends StatelessWidget {
             ),
           ),
 
-          const SizedBox(height: 12),
+          const SizedBox(height: AppSpacing.md),
 
           // ── 종착역 정보 ──
           Padding(
-            padding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
+            padding: const EdgeInsets.fromLTRB(AppSpacing.lg, 0, AppSpacing.lg, AppSpacing.lg),
             child: Row(
               children: [
-                Icon(Icons.flag, size: 12, color: Colors.white38),
-                const SizedBox(width: 6),
+                Icon(Icons.flag, size: AppSpacing.md, color: AppColors.textDisabled),
+                const SizedBox(width: AppSpacing.sm),
                 Text(
                   '${train.terminalName}행',
-                  style: const TextStyle(fontSize: 11, color: Colors.white54),
+                  style: AppTypography.bodySm.copyWith(color: AppColors.textTertiary),
                 ),
               ],
             ),
           ),
         ],
+      ),
       ),
     );
   }
@@ -754,10 +692,10 @@ class TrainDetailPanel extends StatelessWidget {
     required bool isMoving,
   }) {
     return Container(
-      padding: const EdgeInsets.all(12),
+      padding: const EdgeInsets.all(AppSpacing.md),
       decoration: BoxDecoration(
-        color: Colors.white.withOpacity(0.04),
-        borderRadius: BorderRadius.circular(10),
+        color: Colors.white.withValues(alpha: 0.04),
+        borderRadius: BorderRadius.circular(AppSpacing.md),
       ),
       child: Row(
         children: [
@@ -812,12 +750,11 @@ class TrainDetailPanel extends StatelessWidget {
       crossAxisAlignment: alignment,
       mainAxisSize: MainAxisSize.min,
       children: [
-        Text(label, style: TextStyle(fontSize: 9, color: color.withOpacity(0.7))),
-        const SizedBox(height: 3),
+        Text(label, style: AppTypography.caption.copyWith(color: color.withValues(alpha: 0.7))),
+        const SizedBox(height: AppSpacing.xs),
         Text(
           name,
-          style: TextStyle(
-            fontSize: isActive ? 14 : 11,
+          style: (isActive ? AppTypography.bodyMd : AppTypography.bodySm).copyWith(
             fontWeight: isActive ? FontWeight.bold : FontWeight.normal,
             color: color,
           ),
@@ -838,11 +775,11 @@ class TrainDetailPanel extends StatelessWidget {
           Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Container(width: 12, height: 2, color: color.withOpacity(isMoving ? 0.6 : 0.2)),
+              Container(width: AppSpacing.md, height: 2, color: color.withValues(alpha: isMoving ? 0.6 : 0.2)),
               Icon(
                 Icons.chevron_right,
                 size: 14,
-                color: color.withOpacity(isMoving && !isLeft ? 0.8 : 0.3),
+                color: color.withValues(alpha: isMoving && !isLeft ? 0.8 : 0.3),
               ),
             ],
           ),
@@ -861,7 +798,7 @@ class TrainDetailPanel extends StatelessWidget {
         break;
       case 1:
         text = '정차중';
-        chipColor = Colors.greenAccent;
+        chipColor = AppColors.success;
         break;
       case 2:
         text = '출발';
@@ -876,13 +813,13 @@ class TrainDetailPanel extends StatelessWidget {
         chipColor = lineColor;
     }
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      padding: const EdgeInsets.symmetric(horizontal: AppSpacing.sm, vertical: 2),
       decoration: BoxDecoration(
-        color: chipColor.withOpacity(0.15),
-        borderRadius: BorderRadius.circular(4),
-        border: Border.all(color: chipColor.withOpacity(0.4)),
+        color: chipColor.withValues(alpha: 0.15),
+        borderRadius: BorderRadius.circular(AppSpacing.xs),
+        border: Border.all(color: chipColor.withValues(alpha: 0.4)),
       ),
-      child: Text(text, style: TextStyle(fontSize: 9, color: chipColor, fontWeight: FontWeight.bold)),
+      child: Text(text, style: AppTypography.caption.copyWith(color: chipColor, fontWeight: FontWeight.bold)),
     );
   }
 
@@ -987,182 +924,164 @@ class StationDetailPanel extends StatelessWidget {
     final lat = stationInfo?.lat ?? 37.5665;
     final lng = stationInfo?.lng ?? 126.9780;
 
-    return Container(
-      width: double.infinity,
-      margin: const EdgeInsets.symmetric(horizontal: 12),
-      // maxHeight controlled by parent ConstrainedBox
-      decoration: BoxDecoration(
-        color: const Color(0xF01A1A2E),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: primaryColor.withOpacity(0.3), width: 1),
-        boxShadow: [
-          BoxShadow(
-            color: primaryColor.withOpacity(0.1),
-            blurRadius: 20,
-            offset: const Offset(0, -4),
+    // 노선 그라데이션 (환승역은 여러 색 그라데이션)
+    final gradientColors = lineColors.length >= 2
+        ? lineColors.map((c) => c.withValues(alpha: 0.2)).toList()
+        : [primaryColor.withValues(alpha: 0.2), primaryColor.withValues(alpha: 0.05)];
+
+    final panelHeight = MediaQuery.of(context).size.height * 0.30;
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md),
+      child: SizedBox(
+        width: double.infinity,
+        height: panelHeight,
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            color: AppColors.surfaceCard.withValues(alpha: 0.94),
+            borderRadius: BorderRadius.circular(AppSpacing.xl),
+            border: Border.all(color: primaryColor.withValues(alpha: 0.3), width: 1),
           ),
-        ],
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          // ── 역 사진 (Mapbox Satellite) ──
-          ClipRRect(
-            borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
-            child: Stack(
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(AppSpacing.xl),
+            child: Column(
               children: [
-                Image.network(
-                  _satelliteImageUrl(lat, lng),
-                  width: double.infinity,
-                  height: 120,
-                  fit: BoxFit.cover,
-                  errorBuilder: (_, __, ___) => Container(
-                    height: 120,
-                    color: const Color(0xFF2a2a3e),
-                    child: const Center(
-                      child: Icon(Icons.train, size: 40, color: Colors.white12),
-                    ),
-                  ),
-                  loadingBuilder: (_, child, progress) {
-                    if (progress == null) return child;
-                    return Container(
-                      height: 120,
-                      color: const Color(0xFF2a2a3e),
-                      child: const Center(
-                        child: SizedBox(
-                          width: 20, height: 20,
-                          child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white24),
+              // ── 헤더: 노선 그라데이션 + 역명 (열차 패널 스타일) ──
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg, vertical: AppSpacing.md),
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(colors: gradientColors),
+                  borderRadius: const BorderRadius.vertical(top: Radius.circular(AppSpacing.xl)),
+                ),
+                child: Row(
+                  children: [
+                    // 노선 아이콘(들)
+                    if (lineColors.length == 1)
+                      Container(
+                        width: 36, height: 36,
+                        decoration: BoxDecoration(color: primaryColor, shape: BoxShape.circle),
+                        child: Center(
+                          child: Text(
+                            _lineShortName(primaryColor),
+                            style: AppTypography.bodySm.copyWith(fontWeight: FontWeight.w900, color: AppColors.textPrimary),
+                          ),
+                        ),
+                      )
+                    else
+                      // 환승역: 최대 4개까지, 겹쳐서 표시
+                      SizedBox(
+                        width: 24.0 + (lineColors.take(4).length - 1) * 10.0,
+                        height: 28,
+                        child: Stack(
+                          clipBehavior: Clip.none,
+                          children: [
+                            for (int i = 0; i < lineColors.take(4).length; i++)
+                              Positioned(
+                                left: i * 10.0,
+                                child: Container(
+                                  width: 24, height: 24,
+                                  decoration: BoxDecoration(
+                                    color: lineColors[i],
+                                    shape: BoxShape.circle,
+                                    border: Border.all(color: Colors.white24, width: 1.5),
+                                  ),
+                                  child: Center(
+                                    child: Text(
+                                      _lineShortName(lineColors[i]),
+                                      style: AppTypography.caption.copyWith(fontWeight: FontWeight.w900, color: AppColors.textPrimary),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                          ],
                         ),
                       ),
-                    );
-                  },
-                ),
-                // 그라데이션 오버레이
-                Positioned.fill(
-                  child: DecoratedBox(
-                    decoration: BoxDecoration(
-                      gradient: LinearGradient(
-                        begin: Alignment.topCenter,
-                        end: Alignment.bottomCenter,
-                        colors: [
-                          Colors.transparent,
-                          const Color(0xF01A1A2E),
+                    const SizedBox(width: AppSpacing.md),
+                    // 역명 + 노선 칩
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            stationName,
+                            style: AppTypography.titleMd.copyWith(color: primaryColor),
+                          ),
+                          const SizedBox(height: 2),
+                          Wrap(
+                            spacing: AppSpacing.xs,
+                            children: lineColors.map((color) {
+                              final name = _lineNameForColor(color);
+                              return Text(name, style: AppTypography.bodySm.copyWith(color: color.withValues(alpha: 0.8)));
+                            }).toList(),
+                          ),
                         ],
-                        stops: const [0.4, 1.0],
                       ),
                     ),
-                  ),
-                ),
-                // 닫기 버튼
-                Positioned(
-                  top: 8,
-                  right: 8,
-                  child: GestureDetector(
-                    onTap: onClose,
-                    child: Container(
-                      width: 28,
-                      height: 28,
-                      decoration: BoxDecoration(
-                        color: Colors.black54,
-                        shape: BoxShape.circle,
-                      ),
-                      child: const Icon(Icons.close, size: 14, color: Colors.white70),
+                    // 닫기
+                    AppCircleButton(
+                      icon: Icons.close,
+                      onTap: onClose ?? () {},
+                      semanticLabel: '역 상세 닫기',
                     ),
-                  ),
+                  ],
                 ),
-                // 역명 오버레이
-                Positioned(
-                  bottom: 8,
-                  left: 12,
-                  right: 48,
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        stationName,
-                        style: const TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.bold,
-                          color: Colors.white,
-                          shadows: [Shadow(blurRadius: 8, color: Colors.black)],
-                        ),
-                      ),
-                      const SizedBox(height: 2),
-                      // 노선 칩들
-                      Wrap(
-                        spacing: 4,
-                        children: lineColors.map((color) {
-                          final name = _lineNameForColor(color);
-                          return Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
-                            decoration: BoxDecoration(
-                              color: color.withOpacity(0.8),
-                              borderRadius: BorderRadius.circular(3),
-                            ),
-                            child: Text(
-                              name,
-                              style: const TextStyle(fontSize: 8, fontWeight: FontWeight.bold, color: Colors.white),
-                            ),
-                          );
-                        }).toList(),
-                      ),
-                    ],
-                  ),
+              ),
+
+              // ── 혼잡도 정보 ──
+              _buildCongestionRow(primaryColor),
+
+              // ── 시설 폐쇄 안내 ──
+              _buildClosureSection(),
+
+              // ── 출발 정보 라벨 ──
+              Padding(
+                padding: const EdgeInsets.fromLTRB(AppSpacing.lg, AppSpacing.md, AppSpacing.lg, AppSpacing.xs),
+                child: Row(
+                  children: [
+                    Icon(Icons.departure_board, size: 14, color: primaryColor),
+                    const SizedBox(width: AppSpacing.sm),
+                    Text('실시간 출발 정보', style: AppTypography.bodySm.copyWith(fontWeight: FontWeight.w600)),
+                    const Spacer(),
+                    if (isLoading)
+                      SizedBox(width: AppSpacing.md, height: AppSpacing.md, child: CircularProgressIndicator(strokeWidth: 1.5, color: AppColors.textDisabled)),
+                  ],
                 ),
+              ),
+
+              // ── 도착 정보 리스트 ──
+              if (isLoading && arrivals.isEmpty)
+                Padding(
+                  padding: const EdgeInsets.all(AppSpacing.xl),
+                  child: Center(child: Text('조회 중...', style: AppTypography.bodySm.copyWith(color: Colors.grey))),
+                )
+              else if (arrivals.isEmpty)
+                Padding(
+                  padding: const EdgeInsets.all(AppSpacing.xl),
+                  child: Center(child: Text('도착 정보 없음', style: AppTypography.bodySm.copyWith(color: Colors.grey))),
+                )
+              else
+                Builder(builder: (context) {
+                  final filtered = _filterNearestArrivals(arrivals);
+                  return Expanded(
+                    child: ListView.builder(
+                      clipBehavior: Clip.hardEdge,
+                      padding: const EdgeInsets.fromLTRB(AppSpacing.md, AppSpacing.xs, AppSpacing.md, AppSpacing.md),
+                      itemCount: filtered.length,
+                      itemBuilder: (context, index) {
+                        final info = filtered[index];
+                        final lineColor = SubwayColors.getColor(info.subwayId);
+                        return _buildArrivalRow(info, lineColor);
+                      },
+                    ),
+                  );
+                }),
+
+
               ],
             ),
           ),
-
-          // ── 출발 정보 ──
-          Padding(
-            padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
-            child: Row(
-              children: [
-                Icon(Icons.departure_board, size: 14, color: primaryColor),
-                const SizedBox(width: 6),
-                const Text(
-                  '실시간 출발 정보',
-                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Colors.white),
-                ),
-                const Spacer(),
-                if (isLoading)
-                  const SizedBox(
-                    width: 12, height: 12,
-                    child: CircularProgressIndicator(strokeWidth: 1.5, color: Colors.white38),
-                  ),
-              ],
-            ),
-          ),
-
-          // 도착 정보 리스트
-          if (isLoading && arrivals.isEmpty)
-            const Padding(
-              padding: EdgeInsets.all(20),
-              child: Center(
-                child: Text('조회 중...', style: TextStyle(fontSize: 11, color: Colors.grey)),
-              ),
-            )
-          else if (arrivals.isEmpty)
-            const Padding(
-              padding: EdgeInsets.all(20),
-              child: Center(
-                child: Text('도착 정보 없음', style: TextStyle(fontSize: 11, color: Colors.grey)),
-              ),
-            )
-          else
-            Flexible(
-              child: ListView.builder(
-                shrinkWrap: true,
-                padding: const EdgeInsets.fromLTRB(12, 4, 12, 12),
-                itemCount: arrivals.length,
-                itemBuilder: (context, index) {
-                  final info = arrivals[index];
-                  final lineColor = SubwayColors.getColor(info.subwayId);
-                  return _buildArrivalRow(info, lineColor);
-                },
-              ),
-            ),
-        ],
+        ),
       ),
     );
   }
@@ -1170,11 +1089,11 @@ class StationDetailPanel extends StatelessWidget {
   Widget _buildArrivalRow(ArrivalInfo info, Color lineColor) {
     final isUrgent = info.arrivalSeconds <= 60;
     return Container(
-      margin: const EdgeInsets.only(bottom: 6),
-      padding: const EdgeInsets.all(8),
+      margin: const EdgeInsets.only(bottom: AppSpacing.sm),
+      padding: const EdgeInsets.all(AppSpacing.sm),
       decoration: BoxDecoration(
-        color: lineColor.withOpacity(0.08),
-        borderRadius: BorderRadius.circular(8),
+        color: lineColor.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(AppSpacing.sm),
         border: Border(left: BorderSide(color: lineColor, width: 3)),
       ),
       child: Row(
@@ -1185,14 +1104,14 @@ class StationDetailPanel extends StatelessWidget {
               children: [
                 Text(
                   info.trainLineName,
-                  style: const TextStyle(fontSize: 11, color: Colors.white),
+                  style: AppTypography.bodySm.copyWith(color: AppColors.textPrimary),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
                 const SizedBox(height: 2),
                 Text(
                   '${info.destinationName}행 ${info.trainType}',
-                  style: const TextStyle(fontSize: 9, color: Colors.grey),
+                  style: AppTypography.caption.copyWith(color: Colors.grey),
                 ),
               ],
             ),
@@ -1202,15 +1121,14 @@ class StationDetailPanel extends StatelessWidget {
             children: [
               Text(
                 info.arrivalMsg,
-                style: TextStyle(
-                  fontSize: 11,
+                style: AppTypography.bodySm.copyWith(
                   fontWeight: FontWeight.bold,
-                  color: isUrgent ? Colors.redAccent : Colors.greenAccent,
+                  color: isUrgent ? AppColors.danger : AppColors.success,
                 ),
               ),
               Text(
                 info.arrivalCodeText,
-                style: const TextStyle(fontSize: 8, color: Colors.grey),
+                style: AppTypography.caption.copyWith(color: Colors.grey),
               ),
             ],
           ),
@@ -1250,5 +1168,146 @@ class StationDetailPanel extends StatelessWidget {
       }
     }
     return '';
+  }
+
+  /// 방면별 가장 빨리 도착하는 열차 1개씩만 필터
+  List<ArrivalInfo> _filterNearestArrivals(List<ArrivalInfo> all) {
+    final seen = <String>{};
+    final result = <ArrivalInfo>[];
+    for (final info in all) {
+      // 방면 정보 (예: "성수행 - 신도림방면")를 키로 사용
+      final key = info.trainLineName;
+      if (key.isNotEmpty && seen.add(key)) {
+        result.add(info);
+      } else if (key.isEmpty) {
+        // trainLineName이 비어있으면 방향+종착역으로 폴백
+        final fallbackKey = '${info.direction}_${info.destinationName}';
+        if (seen.add(fallbackKey)) {
+          result.add(info);
+        }
+      }
+    }
+    return result;
+  }
+
+  /// 색상으로 노선 짧은 이름 (원 안 표시용)
+  String _lineShortName(Color color) {
+    for (final entry in SubwayColors.lineColors.entries) {
+      if (entry.value == color) {
+        final name = SubwayColors.lineNames[entry.key] ?? '';
+        if (name.endsWith('호선')) return name.replaceAll('호선', '');
+        if (name.length > 2) return name.substring(0, 2);
+        return name;
+      }
+    }
+    return '?';
+  }
+
+  /// 혼잡도 정보 행
+  Widget _buildCongestionRow(Color primaryColor) {
+    final service = CongestionService.instance;
+    if (!service.isLoaded) return const SizedBox.shrink();
+
+    final congestion = service.data[stationName];
+    if (congestion == null) return const SizedBox.shrink();
+
+    final crowding = service.getCrowding(stationName);
+    final Color crowdColor;
+    final String crowdLabel;
+    if (crowding > 0.7) {
+      crowdColor = Colors.red;
+      crowdLabel = '매우 혼잡';
+    } else if (crowding > 0.4) {
+      crowdColor = Colors.orange;
+      crowdLabel = '혼잡';
+    } else if (crowding > 0.2) {
+      crowdColor = Colors.amber;
+      crowdLabel = '보통';
+    } else {
+      crowdColor = Colors.green;
+      crowdLabel = '여유';
+    }
+
+    final formatter = RegExp(r'(\d{1,3})(?=(\d{3})+(?!\d))');
+    String fmt(int n) => n.toString().replaceAllMapped(formatter, (m) => '${m[1]},');
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(AppSpacing.lg, AppSpacing.sm, AppSpacing.lg, 0),
+      child: Row(
+        children: [
+          Icon(Icons.people, size: 14, color: crowdColor),
+          const SizedBox(width: AppSpacing.sm),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+            decoration: BoxDecoration(
+              color: crowdColor.withValues(alpha: 0.15),
+              borderRadius: BorderRadius.circular(4),
+            ),
+            child: Text(crowdLabel, style: AppTypography.caption.copyWith(color: crowdColor, fontWeight: FontWeight.w700)),
+          ),
+          const SizedBox(width: AppSpacing.sm),
+          Text(
+            '승차 ${fmt(congestion.boarding)}명',
+            style: AppTypography.caption.copyWith(color: Colors.blue.shade300),
+          ),
+          const SizedBox(width: AppSpacing.sm),
+          Text(
+            '하차 ${fmt(congestion.alighting)}명',
+            style: AppTypography.caption.copyWith(color: Colors.orange.shade300),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 시설 임시폐쇄 정보 섹션
+  Widget _buildClosureSection() {
+    final closures = ClosureService.instance.getClosures(stationName);
+    if (closures.isEmpty) return const SizedBox.shrink();
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(AppSpacing.lg, AppSpacing.sm, AppSpacing.lg, 0),
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(AppSpacing.sm),
+        decoration: BoxDecoration(
+          color: Colors.orange.withValues(alpha: 0.1),
+          borderRadius: BorderRadius.circular(AppSpacing.sm),
+          border: Border.all(color: Colors.orange.withValues(alpha: 0.3)),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                const Icon(Icons.construction, size: 14, color: Colors.orange),
+                const SizedBox(width: AppSpacing.xs),
+                Text(
+                  '시설 폐쇄 ${closures.length}건',
+                  style: AppTypography.bodySm.copyWith(
+                    fontWeight: FontWeight.w700,
+                    color: Colors.orange,
+                  ),
+                ),
+              ],
+            ),
+            for (final c in closures) ...[
+              const SizedBox(height: AppSpacing.xs),
+              Text(
+                '${c.closurePlace} (~${c.endDate})',
+                style: AppTypography.caption.copyWith(fontWeight: FontWeight.w600),
+              ),
+              if (c.altRoute.isNotEmpty)
+                Text(
+                  c.altRoute,
+                  style: AppTypography.caption.copyWith(color: Colors.grey),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+            ],
+          ],
+        ),
+      ),
+    );
   }
 }

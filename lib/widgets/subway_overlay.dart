@@ -13,6 +13,8 @@ import '../data/route_geometry.dart';
 import '../core/map_interface.dart';
 import '../services/environment_service.dart';
 import '../services/settings_service.dart';
+import '../services/congestion_service.dart';
+import '../services/closure_service.dart';
 
 /// 운행 모드
 enum SubwayMode {
@@ -68,10 +70,12 @@ class SubwayOverlayController {
   double _animProgress = 1.0;
   // 품질 프리셋에 따라 조절되는 값
   int _animIntervalMs = 16; // ~60fps (high), 33ms=30fps (medium), 100ms=10fps (low)
-  // Live 모드: 공식 API 60초 + 네이버 API 30초
-  static const int _liveApiFetchSec = 60;
-  static const int _naverApiFetchSec = 1; // 테스트용 1초
+  // Live 모드: 네이버 10초 (메인) + 서울시 600초 (보조, 네이버 미지원 노선만)
+  static const int _liveApiFetchSec = 60; // 1분 (1호선/수인분당/신분당 등 7개 노선만)
+  static const int _naverApiFetchMs = 100;   // 0.1초 (병렬 요청, 무제한)
   Timer? _naverRefreshTimer;
+  bool _isNaverFetching = false; // 겹침 방지 가드
+  bool _naverFieldsLogged = false; // API 필드 로그 1회용
   // 데모 모드 보간 주기 (10초)
   static const int _demoIntervalSec = 10;
   int _fetchIntervalSec = 60;
@@ -136,6 +140,9 @@ class SubwayOverlayController {
   InterpolatedTrainPosition? get selectedTrainData => _selectedTrainData;
   Map<String, int> get trainDelays => _trainDelays;
   int get delayedTrainCount => _trainDelays.length;
+  bool _showCongestion = false;
+  bool get showCongestion => _showCongestion;
+  CongestionService get congestionService => CongestionService.instance;
 
   void attachMap(IMapController controller) {
     _mapController = controller;
@@ -193,14 +200,23 @@ class SubwayOverlayController {
     _selectedStationArrivals = [];
     _stationLoading = true;
 
-    // 카메라를 역으로 이동
-    if (_selectedStationInfo != null) {
-      _mapController?.moveTo(
-        _selectedStationInfo!.lat,
-        _selectedStationInfo!.lng,
-        zoom: 15.5,
-        pitch: 50,
-      );
+    // 카메라를 역으로 이동 — OSM 스냅 좌표 우선 (지도 위 점과 동일 위치)
+    double? lat, lng;
+    // RouteGeometry에서 스냅 좌표 찾기 (모든 노선에서)
+    for (final lineId in SeoulSubwayData.lineIdToApiName.keys) {
+      final snapped = _routeGeometry.getStationPosition(lineId, stationName);
+      if (snapped != null) {
+        lat = snapped[0];
+        lng = snapped[1];
+        break;
+      }
+    }
+    // 스냅 좌표 없으면 StationInfo 좌표 폴백
+    lat ??= _selectedStationInfo?.lat;
+    lng ??= _selectedStationInfo?.lng;
+
+    if (lat != null && lng != null) {
+      _mapController?.moveTo(lat, lng, zoom: 15.5, pitch: 50);
     }
 
     // 역 하이라이트 효과
@@ -257,6 +273,9 @@ class SubwayOverlayController {
     _lastError = null;
     onStateChanged?.call();
 
+    // 시설 폐쇄 정보 로드 (비동기, 실패해도 무시)
+    ClosureService.instance.fetch();
+
     // OSM 노선 경로 초기화
     try {
       if (!_routeGeometry.isInitialized) {
@@ -299,9 +318,9 @@ class SubwayOverlayController {
       debugPrint('[SubwayOverlay] 🎮 데모 모드 시작 (60fps 연속 보간)');
     } else {
       _fetchIntervalSec = _liveApiFetchSec;
-      // 서울시 공식 API (설정에 따라)
+      // 서울시 공식 API — 항상 초기 1회 호출 (1호선 등 네이버 미지원 노선용)
+      await _fetchAndRender();
       if (useSeoulApi) {
-        await _fetchAndRender();
         _refreshTimer = Timer.periodic(
           const Duration(seconds: _liveApiFetchSec), (_) => _fetchAndRender(),
         );
@@ -310,12 +329,12 @@ class SubwayOverlayController {
       if (useNaverApi) {
         _fetchNaverApi();
         _naverRefreshTimer = Timer.periodic(
-          const Duration(seconds: _naverApiFetchSec), (_) => _fetchNaverApi(),
+          const Duration(milliseconds: _naverApiFetchMs), (_) => _fetchNaverApi(),
         );
       }
       debugPrint('[SubwayOverlay] 📡 Live 모드 시작 '
           '(서울API:${useSeoulApi ? "${_liveApiFetchSec}s" : "OFF"} '
-          '네이버:${useNaverApi ? "${_naverApiFetchSec}s" : "OFF"})');
+          '네이버:${useNaverApi ? "${_naverApiFetchMs}ms" : "OFF"})');
     }
 
     // 애니메이션 타이머 (~60fps)
@@ -469,13 +488,70 @@ class SubwayOverlayController {
     onStateChanged?.call();
   }
 
+  /// 혼잡도 토글
+  void setCongestionVisible(bool v) {
+    _showCongestion = v;
+    _mapController?.setCongestionVisible(v);
+    if (v && !CongestionService.instance.isLoaded) {
+      _loadCongestionData();
+    }
+    onStateChanged?.call();
+  }
+
+  Future<void> _loadCongestionData() async {
+    final service = CongestionService.instance;
+    final success = await service.fetch();
+    if (!success || _mapController == null) return;
+
+    // 역 좌표 매핑 — 전 노선 역 목록에서 검색
+    final points = <Map<String, dynamic>>[];
+    final allStations = SeoulSubwayData.allLines.expand((l) => l).toList();
+    // 역명 → 좌표 맵 (중복 역명은 첫 번째 것 사용)
+    final stationCoords = <String, StationInfo>{};
+    for (final s in allStations) {
+      stationCoords.putIfAbsent(s.name, () => s);
+    }
+
+    for (final entry in service.data.entries) {
+      final name = entry.key;
+      final congestion = entry.value;
+
+      // 역 좌표 찾기 (정확 매칭 → 부분 매칭)
+      var station = stationCoords[name];
+      if (station == null) {
+        // 괄호 제거 매칭: "잠실(송파구청)" → "잠실"
+        final cleanName = name.replaceAll(RegExp(r'\(.*?\)'), '').trim();
+        station = stationCoords[cleanName];
+      }
+      if (station == null) continue;
+
+      final weight = service.getCrowding(name);
+      final total = congestion.total;
+      final label = '${(total / 1000).toStringAsFixed(0)}k';
+
+      points.add({
+        'lat': station.lat,
+        'lng': station.lng,
+        'weight': weight,
+        'label': label,
+      });
+    }
+
+    await _mapController!.updateCongestionHeatmap(points);
+    if (_showCongestion) {
+      _mapController!.setCongestionVisible(true);
+    }
+    debugPrint('[SubwayOverlay] 🔥 혼잡도 데이터 로드: ${points.length}개 역');
+    onStateChanged?.call();
+  }
+
   void setUseNaverApi(bool v) {
     SettingsService.instance.setUseNaverApi(v);
     if (_isActive && _mode == SubwayMode.live) {
       _naverRefreshTimer?.cancel();
       if (v) {
         _naverRefreshTimer = Timer.periodic(
-          const Duration(seconds: _naverApiFetchSec), (_) => _fetchNaverApi(),
+          const Duration(milliseconds: _naverApiFetchMs), (_) => _fetchNaverApi(),
         );
         _fetchNaverApi(); // 즉시 1회 호출
       } else {
@@ -576,72 +652,122 @@ class SubwayOverlayController {
   /// 비공식 API, 제한 없음, 공식 API 사이 보조용
   Future<void> _fetchNaverApi() async {
     if (!_isActive || _mode != SubwayMode.live || !useNaverApi) return;
+    if (_isNaverFetching) return; // 이전 요청 진행중이면 스킵
+    _isNaverFetching = true;
 
     try {
       final trains = await _fetchNaverTrainPositions();
       if (trains.isEmpty) return;
 
-      // 기존 공식 API 스냅샷과 merge
-      // 네이버에서 온 열차는 기존 것을 보충 (덮어쓰기 아님)
-      final existingNos = _simulator.lastApiSnapshot.map((t) => t.trainNo).toSet();
-      final newTrains = trains.where((t) => !existingNos.contains(t.trainNo)).toList();
-      final merged = [..._simulator.lastApiSnapshot, ...newTrains];
+      // 네이버 열차 → 기존 서울API 열차와 merge
+      // 네이버 trainNo는 'N' prefix → 서울API와 충돌 없음
+      // 서울API 열차(1호선/공항철도/GTX-A)는 유지, 네이버 열차는 최신으로 교체
+      final seoulOnlyTrains = _simulator.lastApiSnapshot
+          .where((t) => !t.trainNo.startsWith('N'))
+          .toList();
+      final merged = [...seoulOnlyTrains, ...trains];
 
       _simulator.updateApiSnapshot(merged);
       _simulator.prepareContinuousExtrapolation();
-      debugPrint('[SubwayOverlay] 🌐 네이버 API: ${trains.length}대 (신규 ${newTrains.length}대)');
     } catch (e) {
       debugPrint('[SubwayOverlay] 네이버 API 실패: $e');
+    } finally {
+      _isNaverFetching = false;
     }
   }
 
   /// 네이버 지도 API에서 전 노선 열차 위치 가져오기
-  // 네이버 routeId → 서울시 API subwayId 매핑 (확인된 노선만)
+  /// 네이버 역명 정리: 끝의 '역'만 제거 (역삼, 역촌 등은 보존)
+  static String _cleanStationName(String raw) {
+    if (raw.endsWith('역') && raw.length > 1) {
+      return raw.substring(0, raw.length - 1);
+    }
+    return raw;
+  }
+
+  /// 네이버 시간 문자열 (YYYYMMDDHHmmss) → epoch ms
+  static int _parseNaverTime(String? timeStr) {
+    if (timeStr == null || timeStr.length != 14) return 0;
+    try {
+      final dt = DateTime.parse(
+        '${timeStr.substring(0, 4)}-${timeStr.substring(4, 6)}-${timeStr.substring(6, 8)}'
+        'T${timeStr.substring(8, 10)}:${timeStr.substring(10, 12)}:${timeStr.substring(12, 14)}',
+      );
+      return dt.millisecondsSinceEpoch;
+    } catch (_) {
+      return 0;
+    }
+  }
+
+  // 네이버 routeId → 서울시 API subwayId 매핑 (2025-04 재확인)
   static const Map<String, String> _naverRouteIds = {
-    // 1호선: 네이버 미지원 (서울시 공식 API로만)
     '2': '1002', '3': '1003', '4': '1004', '5': '1005',
     '6': '1006', '7': '1007', '8': '1008', '9': '1009',
     '101': '1063', // 경의중앙선
     '104': '1067', // 경춘선
-    '108': '1065', // 공항철도
-    '109': '1094', // 신림선
-    // 수인분당(102), 신분당(103), 경강(105), 우이신설(106),
-    // 서해(107), GTX-A(151): 네이버 미지원
+    '109': '1077', // 신분당선
+    '112': '1081', // 경강선
+    '113': '1092', // 우이신설선
+    '114': '1093', // 서해선
+    '116': '1075', // 수인분당선
+    '117': '1094', // 신림선
+    // 1호선(200+): 복잡한 계통 분리 → 서울시 API로
+    // 공항철도, GTX-A: 네이버 미지원 → 서울시 API로
   };
 
   Future<List<TrainPosition>> _fetchNaverTrainPositions() async {
-    final results = <TrainPosition>[];
+    // 전 노선 병렬 요청 (순차 32개 → 병렬)
+    final futures = <Future<List<TrainPosition>>>[];
 
     for (final entry in _naverRouteIds.entries) {
       for (final dir in [0, 1]) {
-        try {
-          final url = Uri.parse(
-            'https://pts.map.naver.com/end-subway/api/realtime/location/subway/integrated'
-            '?direction=$dir&routeId=${entry.key}&caller=pc_web&lang=ko',
-          );
-          final response = await http.get(url, headers: {
-            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)',
-          }).timeout(const Duration(seconds: 5));
+        futures.add(_fetchNaverSingleRoute(entry.key, entry.value, dir));
+      }
+    }
 
-          if (response.statusCode == 200) {
-            final List<dynamic> data = jsonDecode(response.body);
-            for (final item in data) {
-              if (item['operatingStatus'] == 'END') continue;
-              final trainNos = item['trainNo'] as List? ?? [];
-              final trainNo = trainNos.isNotEmpty
-                  ? (trainNos[0]['trainNo']?.toString() ?? '') : '';
-              if (trainNo.isEmpty) continue;
+    final allResults = await Future.wait(futures);
+    return allResults.expand((list) => list).toList();
+  }
 
-              // statusCd: 0=접근, 1=도착, 2=출발 → 우리 코드: 0=곧도착, 1=정차, 2=출발
-              final statusCd = int.tryParse(item['statusCd']?.toString() ?? '0') ?? 0;
-              final trainStatus = statusCd == 0 ? 0 : (statusCd == 1 ? 1 : 2);
+  Future<List<TrainPosition>> _fetchNaverSingleRoute(String routeId, String subwayId, int dir) async {
+    final results = <TrainPosition>[];
+    try {
+      final url = Uri.parse(
+        'https://pts.map.naver.com/end-subway/api/realtime/location/subway/integrated'
+        '?direction=$dir&routeId=$routeId&caller=pc_web&lang=ko',
+      );
+      final response = await http.get(url, headers: {
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)',
+      }).timeout(const Duration(milliseconds: 1500));
 
-              results.add(TrainPosition(
-                subwayId: entry.value,
-                subwayName: SubwayColors.lineNames[entry.value] ?? '',
-                stationId: item['stationId']?.toString() ?? '',
-                stationName: (item['stationName']?.toString() ?? '').replaceAll('역', ''),
-                trainNo: 'N$trainNo', // N 접두사로 네이버 출처 구분
+      if (response.statusCode == 200) {
+        final List<dynamic> data = jsonDecode(response.body);
+        // 디버그: 첫 요청의 첫 열차 필드 전체 출력 (1회만)
+        if (data.isNotEmpty && routeId == '2' && dir == 0 && !_naverFieldsLogged) {
+          _naverFieldsLogged = true;
+          debugPrint('[NaverAPI] 샘플 응답 필드: ${data[0].keys.toList()}');
+          debugPrint('[NaverAPI] 샘플 데이터: ${data[0]}');
+        }
+        for (final item in data) {
+          if (item['operatingStatus'] == 'END') continue;
+          final trainNos = item['trainNo'] as List? ?? [];
+          final trainNo = trainNos.isNotEmpty
+              ? (trainNos[0]['trainNo']?.toString() ?? '') : '';
+          if (trainNo.isEmpty) continue;
+
+          final statusCd = int.tryParse(item['statusCd']?.toString() ?? '0') ?? 0;
+          final trainStatus = statusCd == 0 ? 0 : (statusCd == 1 ? 1 : 2);
+
+          // 시간 파싱: prevStopDepartureTime, eventTime (YYYYMMDDHHmmss)
+          final prevDepMs = _parseNaverTime(item['prevStopDepartureTime']?.toString());
+          final eventMs = _parseNaverTime(item['eventTime']?.toString());
+
+          results.add(TrainPosition(
+            subwayId: subwayId,
+            subwayName: SubwayColors.lineNames[subwayId] ?? '',
+            stationId: item['stationId']?.toString() ?? '',
+            stationName: _cleanStationName(item['stationName']?.toString() ?? ''),
+            trainNo: 'N$trainNo',
                 lastRecvDate: '',
                 recvTime: '',
                 direction: dir,
@@ -650,24 +776,31 @@ class SubwayOverlayController {
                 trainStatus: trainStatus,
                 expressType: 0,
                 isLastTrain: false,
+                prevDepartureMs: prevDepMs,
+                eventTimeMs: eventMs,
               ));
             }
           }
-        } catch (_) {}
-      }
-    }
+    } catch (_) {}
     return results;
   }
 
   /// API에서 데이터 fetch (Live 모드, 전체 노선)
+  // 네이버 API가 커버하지 않는 노선 (서울시 공식 API로만 조회)
+  // 네이버에서 커버 안 되는 노선만 서울시 API로
+  static const List<String> _seoulApiOnlyLines = [
+    '1호선', '공항철도', 'GTX-A',
+  ];
+
+  /// 서울시 공식 API fetch (네이버 미지원 노선만, 10분마다)
   Future<void> _fetchAndRender() async {
     _adjustInterval();
     if (!_isActive) return;
 
     try {
-      final lineNames = _getSelectedLineApiNames();
+      // 네이버가 커버 못하는 노선만 서울시 API로 호출 (API 절약)
       final allPositions = await _apiService.fetchAllTrainPositions(
-        lineNames: lineNames,
+        lineNames: _seoulApiOnlyLines,
       );
 
       final allTrains = <TrainPosition>[];
@@ -681,6 +814,8 @@ class SubwayOverlayController {
         _lastError = 'API 빈 응답 (기존 열차 유지중)';
         return;
       }
+
+      debugPrint('[SubwayOverlay] 📡 서울시 API: ${allTrains.length}대 (${_seoulApiOnlyLines.join(", ")})');
 
       // 교정형 시뮬레이션: API 데이터로 속도 교정 (위치 리셋 아님)
       _simulator.updateApiSnapshot(allTrains);

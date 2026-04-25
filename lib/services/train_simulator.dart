@@ -276,58 +276,149 @@ class TrainSimulator {
       if (fromDist == null || toDist == null) continue;
 
       // 실측 소요시간 우선, 없으면 스케줄 기반
-      final segKey = '\${train.subwayId}_\${min(fromIdx, toIdx)}_\${max(fromIdx, toIdx)}';
+      final segKey = '${train.subwayId}_${min(fromIdx, toIdx)}_${max(fromIdx, toIdx)}';
       final observedMs = _observedTravelMs[segKey];
       final travelMs = observedMs ?? (schedule.getTravelSec(min(fromIdx, toIdx), max(fromIdx, toIdx)) * 1000).round();
 
-      // 출발 시각 역산: API 상태에서 "지금 구간의 몇 %인지"로 출발 시각 추정
-      int departureMs;
-      switch (train.trainStatus) {
-        case 2: // 방금 출발
-          departureMs = nowMs;
-          break;
-        case 3: // 30% 지점
-          departureMs = nowMs - (travelMs * 0.30).round();
-          break;
-        case 0: // 85% 지점
-          departureMs = nowMs - (travelMs * 0.85).round();
-          break;
-        case 1: // 정차중 — 정차시간 후 출발 예정
-          final dwellMs = (schedule.getStationDwell(stIdx) * 500).round(); // 정차 중간
-          departureMs = nowMs + dwellMs;
-          break;
-        default:
-          departureMs = nowMs - (travelMs * 0.50).round();
-      }
-      final arrivalMs = departureMs + (travelMs < 10000 ? 30000 : travelMs);
-
-      // ── 기존 열차: 절대 세그먼트 교체 안 함. 속도만 조정. ──
+      // ── 기존 세그먼트 갱신 ──
       final existing = _segments[train.trainNo];
       if (existing != null) {
-        // API 위치 계산
-        final apiDist = fromDist + (toDist - fromDist) * _statusToProgress(train.trainStatus);
-        final animDist = existing.trackDistance(nowMs);
-        final segDist = (existing.endDistM - existing.startDistM).abs();
+        final bool isStopped = train.trainStatus == 1;
+        final bool hasRealTime = train.prevDepartureMs > 0;
 
-        if (segDist > 10) {
-          final distError = apiDist - animDist; // 양수=뒤처짐, 음수=앞서감
-          final timeErrorMs = (distError / segDist * existing.durationMs).round();
-          // 앞서가면(error<0) delay 증가 → 느려짐
-          // 뒤처지면(error>0) delay 감소 → 빨라짐
-          // 달리는 중 변경 없음 → 다음 역 정차에서 적용
-          existing.pendingCorrectionMs -= (timeErrorMs * 0.3).round();
+        // 갱신 조건: 역/상태가 바뀌었을 때만 세그먼트 교체
+        final bool stationChanged = existing.endStationName != stations[toIdx].name &&
+            existing.endStationName != stations[fromIdx].name;
+        final bool statusChanged = (isStopped && !existing.isComplete(nowMs)) ||
+            (!isStopped && existing.isComplete(nowMs));
+
+        if (!statusChanged && !stationChanged) {
+          existing.confidence = 1.0;
+
+          // ── 연속 위치 보정: 세그먼트 유지, delayMs로 타임라인 조정 ──
+          // 세그먼트 교체 X → 점프 없음. targetDelayMs 설정만.
+          if (!isStopped && existing.durationMs > 0) {
+            double expectedProgress;
+            if (hasRealTime) {
+              final elapsed = nowMs - train.prevDepartureMs;
+              expectedProgress = (elapsed / travelMs).clamp(0.0, 0.95);
+            } else {
+              expectedProgress = _statusToProgress(train.trainStatus);
+            }
+
+            final actualProgress = existing.progress(nowMs);
+            final progressError = actualProgress - expectedProgress; // 양수=앞섬, 음수=뒤처짐
+
+            if (progressError.abs() > 0.05) {
+              // 시간 오차 → delay 목표값 설정 (양수=감속, 음수=가속)
+              existing.targetDelayMs = (progressError * existing.durationMs).round();
+            }
+          }
+          continue;
         }
-        existing.confidence = 1.0;
-        continue; // ← 핵심: 기존 열차는 무조건 여기서 끝. 세그먼트 교체 없음.
+
+        // 현재 애니메이션 위치
+        final currentDist = existing.trackDistance(nowMs);
+        final targetStationName = isStopped ? stations[fromIdx].name : stations[toIdx].name;
+        final targetStationIdx = isStopped ? fromIdx : toIdx;
+
+        if (isStopped) {
+          // 정차중: 현재 위치에서 역으로 부드럽게 이동
+          final drift = (fromDist - currentDist).abs();
+          // 급발진 방지: 속도 15 m/s 상한 유지 (상한 클램프 제거)
+          // 1km 이상 drift → 텔레포트 (페이드인)
+          final bool shouldTeleport = drift > 1000;
+          final int durationMs = shouldTeleport
+              ? 500
+              : drift < 30 ? 500 : max((drift / 15.0 * 1000).round(), 500);
+          final newSeg = TrainSegment.create(
+            trainNo: train.trainNo,
+            subwayId: train.subwayId,
+            subwayName: train.subwayName,
+            direction: train.direction,
+            expressType: train.expressType,
+            terminalName: train.terminalName,
+            isLastTrain: train.isLastTrain,
+            startDistM: shouldTeleport ? fromDist : currentDist,
+            endDistM: fromDist,
+            startStationName: stations[fromIdx].name,
+            endStationName: targetStationName,
+            departureMs: nowMs,
+            arrivalMs: nowMs + durationMs,
+            fromStationIdx: fromIdx,
+            toStationIdx: targetStationIdx,
+          );
+          newSeg.confidence = 1.0;
+          if (shouldTeleport) newSeg.teleportAtMs = nowMs;
+          _segments[train.trainNo] = newSeg;
+        } else {
+          // 이동중: 현재 위치에서 도착역까지 — 속도 기반 시간 계산
+          final segDistM = (toDist - fromDist).abs();
+          final segSpeedMps = segDistM > 0 ? segDistM / (travelMs / 1000.0) : 10.0;
+          // 최대 25m/s (90km/h) 제한
+          final clampedSpeed = segSpeedMps.clamp(3.0, 25.0);
+          final remainDistM = (toDist - currentDist).abs();
+          // 급발진 방지: 역간 거리의 3배 이상 drift → 텔레포트
+          final bool moveTeleport = segDistM > 0 && remainDistM > segDistM * 3;
+          final effectiveStartDist = moveTeleport ? fromDist : currentDist;
+          final effectiveRemainDistM = moveTeleport ? segDistM : remainDistM;
+          final remainMs = max((effectiveRemainDistM / clampedSpeed * 1000).round(), 5000);
+
+          final newSeg = TrainSegment.create(
+            trainNo: train.trainNo,
+            subwayId: train.subwayId,
+            subwayName: train.subwayName,
+            direction: train.direction,
+            expressType: train.expressType,
+            terminalName: train.terminalName,
+            isLastTrain: train.isLastTrain,
+            startDistM: effectiveStartDist,
+            endDistM: toDist,
+            startStationName: stations[fromIdx].name,
+            endStationName: targetStationName,
+            departureMs: nowMs,
+            arrivalMs: nowMs + remainMs,
+            fromStationIdx: fromIdx,
+            toStationIdx: targetStationIdx,
+          );
+          newSeg.confidence = 1.0;
+          if (moveTeleport) newSeg.teleportAtMs = nowMs;
+          _segments[train.trainNo] = newSeg;
+        }
+        continue;
       }
 
-      // 비정상 속도 체크: travelMs가 너무 짧으면 (제트기 방지) 최소 30초
-      final safeTravelMs = travelMs < 10000 ? 30000 : travelMs;
       // 거리가 비정상적이면 스킵 (0m 이동 또는 50km 이상)
       final segDistM = (toDist - fromDist).abs();
       if (segDistM < 10 || segDistM > 50000) continue;
 
       // 새 세그���트 생성
+      // 속도 기반 시간 계산 (급발진 방지)
+      // API 상태/시간 기반 초기 위치 계산 (0%에서 시작하면 drift 원인)
+      final bool newIsStopped = train.trainStatus == 1;
+      double initialProgress;
+      if (newIsStopped) {
+        initialProgress = 0.0;
+      } else if (train.prevDepartureMs > 0) {
+        // 네이버 API: 실제 출발 시각으로 정확한 진행률 계산
+        initialProgress = ((nowMs - train.prevDepartureMs) / travelMs).clamp(0.0, 0.95);
+      } else {
+        // 서울 API: 상태 코드 기반 추정
+        initialProgress = _statusToProgress(train.trainStatus);
+      }
+
+      final double initialDist = newIsStopped
+          ? fromDist
+          : fromDist + (toDist - fromDist) * initialProgress;
+      final double newEndDist = newIsStopped ? fromDist : toDist;
+      final double remainDist = (newEndDist - initialDist).abs();
+
+      // 속도 기반 남은 시간 계산
+      final newSegSpeedMps = segDistM > 0 ? (segDistM / (travelMs / 1000.0)).clamp(3.0, 25.0) : 10.0;
+      final int newDurationMs = newIsStopped
+          ? 1000
+          : max((remainDist / newSegSpeedMps * 1000).round(), 5000);
+
       _segments[train.trainNo] = TrainSegment.create(
         trainNo: train.trainNo,
         subwayId: train.subwayId,
@@ -336,14 +427,14 @@ class TrainSimulator {
         expressType: train.expressType,
         terminalName: train.terminalName,
         isLastTrain: train.isLastTrain,
-        startDistM: fromDist,
-        endDistM: toDist,
+        startDistM: initialDist,
+        endDistM: newEndDist,
         startStationName: stations[fromIdx].name,
-        endStationName: stations[toIdx].name,
-        departureMs: departureMs,
-        arrivalMs: arrivalMs,
+        endStationName: newIsStopped ? stations[fromIdx].name : stations[toIdx].name,
+        departureMs: nowMs,
+        arrivalMs: nowMs + newDurationMs,
         fromStationIdx: fromIdx,
-        toStationIdx: toIdx,
+        toStationIdx: newIsStopped ? fromIdx : toIdx,
       );
     }
 
@@ -357,10 +448,8 @@ class TrainSimulator {
     }
     for (final key in toRemove) _segments.remove(key);
 
-    // ── 검증 로그: 5초마다만 출력 ──
-    final shouldLog = _lastLogTime == null ||
-        nowMs - _lastLogTime! > 5000;
-    if (!shouldLog) return;
+    // ── 검증 로그: 10초마다 출력 ──
+    if (_lastLogTime != null && nowMs - _lastLogTime! < 10000) return;
     _lastLogTime = nowMs;
     int matched = 0, totalError = 0, maxError = 0;
     final lineStats = <String, List<int>>{}; // lineId → [count, totalError]
@@ -376,8 +465,23 @@ class TrainSimulator {
       final stDist = rg.getStationDistance(train.subwayId, stations[stIdx].name);
       if (stDist == null) continue;
 
+      // API 상태에 따른 실제 추정 위치 계산 (역 사이 보간)
+      double apiDist = stDist;
+      final isUp = train.direction == 0;
+      if (train.trainStatus == 2 || train.trainStatus == 3 || train.trainStatus == 0) {
+        // 이동중: 이전역과 현재역 사이
+        final prevIdx = isUp
+            ? (stIdx < stations.length - 1 ? stIdx + 1 : stIdx)
+            : (stIdx > 0 ? stIdx - 1 : stIdx);
+        final prevDist = rg.getStationDistance(train.subwayId, stations[prevIdx].name);
+        if (prevDist != null) {
+          final progress = _statusToProgress(train.trainStatus);
+          apiDist = prevDist + (stDist - prevDist) * progress;
+        }
+      }
+
       final animDist = seg.trackDistance(nowMs);
-      final errorM = (stDist - animDist).abs().round();
+      final errorM = (apiDist - animDist).abs().round();
 
       matched++;
       totalError += errorM;
@@ -391,7 +495,7 @@ class TrainSimulator {
       if (!samplePerLine.containsKey(train.subwayId) || errorM > 300) {
         samplePerLine[train.subwayId] =
             '  ${train.trainNo} ${train.stationName}[${train.statusText}] '
-            'API:${stDist.round()}m 애니:${animDist.round()}m '
+            'API:${apiDist.round()}m 애니:${animDist.round()}m '
             '오차:${errorM}m delay:${seg.delayMs}ms';
       }
     }
@@ -417,10 +521,10 @@ class TrainSimulator {
   /// trainStatus → 구간 내 진행률 (0~1)
   double _statusToProgress(int status) {
     switch (status) {
-      case 2: return 0.05;  // 출발
-      case 3: return 0.30;  // 이동중
-      case 0: return 0.85;  // 곧 도착
-      case 1: return 1.00;  // 정차
+      case 2: return 0.05;  // 출발 (현재역에서 막 떠남)
+      case 3: return 0.30;  // 이동중 (이전역→현재역 30%)
+      case 0: return 0.85;  // 곧 도착 (이전역→현재역 85%)
+      case 1: return 0.0;   // 정차중 (현재역에 있음, 다음역으로 안 감!)
       default: return 0.50;
     }
   }
@@ -429,7 +533,7 @@ class TrainSimulator {
   VoidCallback? onTrainArrivedAtStation;
   bool _arrivalTriggered = false;
 
-  /// 구간 완료된 열차 → 다음 역으로 자동 전진
+  /// 구간 완료된 열차 → 다음 역으로 자동 전진 (최대 1구간만)
   void _advanceCompletedSegments(int nowMs) {
     final rg = _routeGeometry;
     if (rg == null) return;
@@ -437,6 +541,9 @@ class TrainSimulator {
     for (final entry in _segments.entries.toList()) {
       final seg = entry.value;
       if (!seg.isComplete(nowMs)) continue;
+
+      // confidence가 낮으면 자동 전진 하지 않음 (API 보정 대기)
+      if (seg.confidence < 0.5) continue;
 
       // 정차 시간 확인
       final stations = SeoulSubwayData.getExpressStations(seg.subwayId, seg.expressType);
@@ -477,17 +584,10 @@ class TrainSimulator {
       var travelMs = _observedTravelMs[advSegKey] ??
           (schedule.getTravelSec(min(nextFromIdx, nextToIdx), max(nextFromIdx, nextToIdx)) * 1000).round();
 
-      // 속도 자동 보정: pendingCorrection이 양수(앞서감)면 다음 구간 더 느리게
-      // pendingCorrection이 음수(뒤처짐)면 다음 구간 더 빠르게
-      final correction = seg.pendingCorrectionMs.clamp(-30000, 30000);
-      if (correction > 0) {
-        // 앞서감 → 다음 구간 소요시간 늘리기 (최대 50% 증가)
-        travelMs = (travelMs * (1.0 + (correction / 30000.0) * 0.5)).round();
-      } else if (correction < 0) {
-        // 뒤처짐 → 다음 구간 소요시간 줄이기 (최대 30% 감소)
-        travelMs = (travelMs * (1.0 + (correction / 30000.0) * 0.3)).round();
-      }
-      travelMs = travelMs.clamp(10000, 600000); // 최소 10초, 최대 10분
+      // 속도 상한: 최대 25m/s (90km/h) — 급발진 방지
+      final advDistM = (toDist - fromDist).abs();
+      final minTravelMs = (advDistM / 25.0 * 1000).round();
+      travelMs = max(travelMs, minTravelMs).clamp(10000, 600000);
 
       final newDepartureMs = nowMs;
 
@@ -508,7 +608,7 @@ class TrainSimulator {
         fromStationIdx: nextFromIdx,
         toStationIdx: nextToIdx,
         delayMs: 0, // delay 리셋 — 새 구간은 깨끗하게 시작
-        confidence: seg.confidence,
+        confidence: seg.confidence * 0.8, // API 없이 전진할 때마다 신뢰도 감소
       );
     }
   }
@@ -525,13 +625,24 @@ class TrainSimulator {
 
     final nowMs = DateTime.now().millisecondsSinceEpoch;
 
-    // 완료된 세그먼트 자동 전진
+    // 구간 완료된 열차 → 다음 역으로 자동 전진
     _advanceCompletedSegments(nowMs);
+
+    // ── 매 프레임: delayMs → targetDelayMs 부드러운 수렴 ──
+    // 2%/frame at 60fps → ~2초에 70% 수렴, ~5초에 95% 수렴
+    for (final seg in _segments.values) {
+      final diff = seg.targetDelayMs - seg.delayMs;
+      if (diff.abs() > 10) {
+        seg.delayMs += (diff * 0.02).round().clamp(-100, 100);
+      } else if (diff != 0) {
+        seg.delayMs = seg.targetDelayMs; // 오차 10ms 이하면 스냅
+      }
+    }
 
     final results = <InterpolatedTrainPosition>[];
 
     for (final seg in _segments.values) {
-      // 순수 함수: 현재시각 → 경로 거리 (달리는 중 변경 없음)
+      // 순수 함수: 현재시각 → 경로 거리
       final dist = seg.trackDistance(nowMs);
 
       // 경로 거리 → 좌표
@@ -568,19 +679,29 @@ class TrainSimulator {
         expressType: seg.expressType,
         isLastTrain: seg.isLastTrain,
         bearing: bearing,
+        opacity: seg.displayOpacity(nowMs),
       ));
     }
 
     return results;
   }
 
-  /// 역명으로 역 인덱스 검색 (부분 매칭 지원)
+  /// 역명으로 역 인덱스 검색 (괄호 제거 + 부분 매칭)
   int _findStationIdx(List<StationInfo> stations, String name) {
+    // 1) 정확 매칭
     for (int i = 0; i < stations.length; i++) {
       if (stations[i].name == name) return i;
     }
+    // 2) 괄호 제거 매칭: "총신대입구(이수)" → "총신대입구"
+    final cleanName = name.replaceAll(RegExp(r'\(.*?\)'), '').trim();
+    if (cleanName != name) {
+      for (int i = 0; i < stations.length; i++) {
+        if (stations[i].name == cleanName) return i;
+      }
+    }
+    // 3) 부분 매칭 (마지막 수단)
     for (int i = 0; i < stations.length; i++) {
-      if (stations[i].name.contains(name) || name.contains(stations[i].name)) {
+      if (stations[i].name.contains(cleanName) || cleanName.contains(stations[i].name)) {
         return i;
       }
     }

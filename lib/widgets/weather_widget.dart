@@ -1,7 +1,11 @@
 import 'package:flutter/material.dart';
+import 'package:cupertino_native_better/cupertino_native.dart';
 import '../services/environment_service.dart';
+import '../theme/app_colors.dart';
+import '../theme/app_typography.dart';
+import '../theme/app_spacing.dart';
 
-/// 지도 위 날씨/시간 표시 위젯
+/// 지도 위 날씨/시간 위젯 (리퀴드 글라스, 완전 세로 배치)
 class WeatherTimeWidget extends StatelessWidget {
   final EnvironmentData? environment;
 
@@ -23,39 +27,39 @@ class WeatherTimeWidget extends StatelessWidget {
     };
 
     final weatherColor = switch (env.weather) {
-      WeatherCondition.clear => Colors.amberAccent,
-      WeatherCondition.cloudy => Colors.grey,
-      WeatherCondition.rain => Colors.lightBlueAccent,
-      WeatherCondition.drizzle => Colors.lightBlue,
-      WeatherCondition.snow => Colors.white,
-      WeatherCondition.fog => Colors.blueGrey,
-      WeatherCondition.thunderstorm => Colors.deepPurpleAccent,
+      WeatherCondition.clear => AppColors.weatherClear,
+      WeatherCondition.cloudy => AppColors.weatherCloudy,
+      WeatherCondition.rain => AppColors.weatherRain,
+      WeatherCondition.drizzle => AppColors.weatherDrizzle,
+      WeatherCondition.snow => AppColors.weatherSnow,
+      WeatherCondition.fog => AppColors.weatherFog,
+      WeatherCondition.thunderstorm => AppColors.weatherThunder,
     };
 
-    return Card(
-      color: Colors.black.withValues(alpha: 0.7),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(timeIcon, size: 14, color: Colors.white54),
-            const SizedBox(width: 4),
-            Text(timeStr, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.white)),
-            const SizedBox(width: 8),
-            Icon(env.weatherIcon, size: 14, color: weatherColor),
-            const SizedBox(width: 4),
-            Text(
-              '${env.temperature.toStringAsFixed(0)}°',
-              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.white),
-            ),
-            const SizedBox(width: 4),
-            Text(
-              env.weatherDescription,
-              style: TextStyle(fontSize: 10, color: weatherColor),
-            ),
-          ],
+    const shadow = [Shadow(blurRadius: 4, color: Colors.black54)];
+
+    return Semantics(
+      label: '현재 시간 $timeStr, 기온 ${env.temperature.toStringAsFixed(0)}도',
+      child: LiquidGlassContainer(
+        config: const LiquidGlassConfig(
+          effect: CNGlassEffect.regular,
+          shape: CNGlassEffectShape.capsule,
+          interactive: false,
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(AppSpacing.md),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(timeIcon, size: 18, color: AppColors.weatherTimeIcon),
+              const SizedBox(height: AppSpacing.xs),
+              Text(timeStr, style: AppTypography.bodySm.copyWith(fontWeight: FontWeight.w700, color: AppColors.weatherTimeText, shadows: shadow)),
+              const SizedBox(height: AppSpacing.sm),
+              Icon(env.weatherIcon, size: 18, color: weatherColor),
+              const SizedBox(height: AppSpacing.xs),
+              Text('${env.temperature.toStringAsFixed(0)}°', style: AppTypography.bodySm.copyWith(fontWeight: FontWeight.w700, color: weatherColor, shadows: shadow)),
+            ],
+          ),
         ),
       ),
     );

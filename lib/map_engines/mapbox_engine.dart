@@ -1,7 +1,7 @@
 import 'dart:convert';
 import 'dart:math';
 import 'package:flutter/material.dart';
-import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart';
+import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart' hide Visibility;
 import '../core/map_interface.dart';
 import '../models/subway_models.dart';
 import '../data/seoul_subway_data.dart';
@@ -52,6 +52,11 @@ class _MapboxEngineState extends State<MapboxEngine> implements IMapController {
   static const _delaySourceId = 'subway-delay-source';
   static const _delayGlowLayerId = 'subway-delay-glow-layer';
   static const _delayLabelLayerId = 'subway-delay-label-layer';
+  // 혼잡도 히트맵 레이어
+  static const _congestionSourceId = 'subway-congestion-source';
+  static const _congestionHeatmapLayerId = 'subway-congestion-heatmap-layer';
+  static const _congestionCircleLayerId = 'subway-congestion-circle-layer';
+  static const _congestionLabelLayerId = 'subway-congestion-label-layer';
   bool _layersInitialized3D = false;
   // ignore: unused_field
   bool _undergroundVisible = true;
@@ -60,9 +65,12 @@ class _MapboxEngineState extends State<MapboxEngine> implements IMapController {
   void Function(String trainNo)? _onTrainTapped;
   void Function(String stationName)? _onStationTapped;
   VoidCallback? _onMapTappedEmpty;
+  VoidCallback? _onAnyMapTap;
   bool _isFollowing = false;
   String? _selectedTrainNo;
   String? _selectedStationName;
+  double? _selectedStationLat;
+  double? _selectedStationLng;
 
   // 서울 위도에서의 미터→도 변환 계수
   static const double _mPerDegLat = 111320.0;
@@ -568,6 +576,79 @@ class _MapboxEngineState extends State<MapboxEngine> implements IMapController {
 
       debugPrint('[MapboxEngine] ✅ 열차 지연 표시 레이어 생성 완료');
 
+      // 6) 혼잡도 시각화 레이어 (히트맵 + 원형 마커 + 라벨)
+      await style.addSource(GeoJsonSource(id: _congestionSourceId, data: emptyGeoJson));
+
+      // 히트맵 (낮은 줌에서 표시)
+      await style.addLayerAt(HeatmapLayer(
+        id: _congestionHeatmapLayerId,
+        sourceId: _congestionSourceId,
+        heatmapWeightExpression: ['get', 'weight'],
+        heatmapIntensityExpression: ['interpolate', ['linear'], ['zoom'], 8, 0.8, 13, 1.5],
+        heatmapRadiusExpression: ['interpolate', ['linear'], ['zoom'], 8, 15.0, 11, 30.0, 13, 50.0],
+        heatmapColorExpression: [
+          'interpolate', ['linear'], ['heatmap-density'],
+          0, 'rgba(0,0,0,0)',
+          0.2, 'rgba(0,228,0,0.3)',
+          0.4, 'rgba(200,255,0,0.4)',
+          0.6, 'rgba(255,200,0,0.5)',
+          0.8, 'rgba(255,100,0,0.6)',
+          1.0, 'rgba(255,0,0,0.7)',
+        ],
+        heatmapOpacityExpression: ['interpolate', ['linear'], ['zoom'], 12, 0.8, 15, 0.0],
+        // visibility: 초기 숨김 (아래에서 setStyleLayerProperty로 처리)
+      ), LayerPosition(below: _stationPillOutlineLayerId));
+
+      // 혼잡도 원형 마커 (높은 줌에서 표시)
+      await style.addLayerAt(CircleLayer(
+        id: _congestionCircleLayerId,
+        sourceId: _congestionSourceId,
+        circleColorExpression: [
+          'interpolate', ['linear'], ['get', 'weight'],
+          0.0, 'rgba(76,175,80,0.6)',
+          0.3, 'rgba(255,235,59,0.7)',
+          0.6, 'rgba(255,152,0,0.8)',
+          0.85, 'rgba(244,67,54,0.9)',
+        ],
+        circleRadiusExpression: [
+          'interpolate', ['linear'], ['get', 'weight'],
+          0.0, 4.0,
+          0.3, 8.0,
+          0.6, 14.0,
+          1.0, 24.0,
+        ],
+        circleOpacityExpression: ['interpolate', ['linear'], ['zoom'], 12, 0.0, 13, 0.7],
+        circleBlur: 0.3,
+        // visibility: 초기 숨김 (아래에서 setStyleLayerProperty로 처리)
+      ), LayerPosition(below: _stationPillOutlineLayerId));
+
+      // 혼잡도 라벨 (높은 줌에서)
+      await style.addLayerAt(SymbolLayer(
+        id: _congestionLabelLayerId,
+        sourceId: _congestionSourceId,
+        textFieldExpression: ['get', 'label'],
+        textSize: 10.0,
+        textColorExpression: [
+          'interpolate', ['linear'], ['get', 'weight'],
+          0.0, 'rgba(56,142,60,1)',
+          0.5, 'rgba(230,81,0,1)',
+          1.0, 'rgba(198,40,40,1)',
+        ],
+        textHaloColor: Colors.white.toARGB32(),
+        textHaloWidth: 1.5,
+        textOffsetExpression: ['literal', [0, 2.0]],
+        textAllowOverlap: false,
+        minZoom: 15.0,
+        // visibility: 초기 숨김 (아래에서 setStyleLayerProperty로 처리)
+      ), LayerPosition(above: _congestionCircleLayerId));
+
+      // 혼잡도 레이어 초기 숨김
+      style.setStyleLayerProperty(_congestionHeatmapLayerId, 'visibility', 'none');
+      style.setStyleLayerProperty(_congestionCircleLayerId, 'visibility', 'none');
+      style.setStyleLayerProperty(_congestionLabelLayerId, 'visibility', 'none');
+
+      debugPrint('[MapboxEngine] ✅ 혼잡도 레이어 생성 완료');
+
       _layersInitialized3D = true;
     } catch (e) {
       debugPrint('[MapboxEngine] ❌ 3D 레이어 초기화 실패: $e');
@@ -580,6 +661,7 @@ class _MapboxEngineState extends State<MapboxEngine> implements IMapController {
     final style = _mapboxMap!.style;
 
     for (final layerId in [
+      _congestionLabelLayerId, _congestionCircleLayerId, _congestionHeatmapLayerId,
       _delayLabelLayerId, _delayGlowLayerId,
       _stationLabelLayerId, _stationDotLayerId, _stationOutlineLayerId,
       _stationPillFillLayerId, _stationPillOutlineLayerId,
@@ -590,6 +672,7 @@ class _MapboxEngineState extends State<MapboxEngine> implements IMapController {
       style.removeStyleLayer(layerId);
     }
     for (final sourceId in [
+      _congestionSourceId,
       _delaySourceId,
       _stationSourceId, _stationPillSourceId, _selectedStationSourceId,
       _selectedTrainSourceId, _trainSourceId,
@@ -778,7 +861,21 @@ class _MapboxEngineState extends State<MapboxEngine> implements IMapController {
         height = trainHeight;
       }
 
-      _writeTrainFeature(sb, train, colorStr, height, train.expressType);
+      // 텔레포트 페이드인: opacity < 1이면 색상 alpha에 반영
+      final String finalColorStr;
+      if (train.opacity < 1.0) {
+        final op = train.opacity.clamp(0.0, 1.0);
+        // rgba(...,1) → rgba(...,op) 변환
+        if (colorStr.startsWith('rgba(')) {
+          final lastComma = colorStr.lastIndexOf(',');
+          finalColorStr = '${colorStr.substring(0, lastComma)},$op)';
+        } else {
+          finalColorStr = colorStr;
+        }
+      } else {
+        finalColorStr = colorStr;
+      }
+      _writeTrainFeature(sb, train, finalColorStr, height, train.expressType);
     }
 
     sb.write(']}');
@@ -844,8 +941,16 @@ class _MapboxEngineState extends State<MapboxEngine> implements IMapController {
     if (_selectedStationName != null &&
         _selectedStationName != _lastSelectedStationHighlight) {
       _lastSelectedStationHighlight = _selectedStationName;
-      final station = SeoulSubwayData.findStation(_selectedStationName!);
-      if (station != null) {
+      // 좌표: 탭 시 저장된 feature 좌표 우선 (지도 위 점과 동일 위치)
+      double? hlLat = _selectedStationLat;
+      double? hlLng = _selectedStationLng;
+      // 없으면 StationInfo 폴백
+      if (hlLat == null || hlLng == null) {
+        final station = SeoulSubwayData.findStation(_selectedStationName!);
+        hlLat = station?.lat;
+        hlLng = station?.lng;
+      }
+      if (hlLat != null && hlLng != null) {
         Color stationColor = Colors.blueAccent;
         for (final entry in SeoulSubwayData.lineIdToApiName.entries) {
           final stations = SeoulSubwayData.getLineStations(entry.key);
@@ -857,7 +962,7 @@ class _MapboxEngineState extends State<MapboxEngine> implements IMapController {
         final colorStr = _colorToRgba(stationColor);
         _cachedStationHighlightJson =
           '{"type":"FeatureCollection","features":[{"type":"Feature",'
-          '"geometry":{"type":"Point","coordinates":[${station.lng},${station.lat}]},'
+          '"geometry":{"type":"Point","coordinates":[$hlLng,$hlLat]},'
           '"properties":{"color":"$colorStr","opacity":0.45}}]}';
         await _updateSourceData(_selectedStationSourceId, _cachedStationHighlightJson!);
       }
@@ -1045,6 +1150,35 @@ class _MapboxEngineState extends State<MapboxEngine> implements IMapController {
   }
 
   @override
+  Future<void> updateCongestionHeatmap(List<Map<String, dynamic>> points) async {
+    if (_mapboxMap == null || !_layersInitialized3D) return;
+
+    final sb = StringBuffer('{"type":"FeatureCollection","features":[');
+    bool first = true;
+    for (final p in points) {
+      if (!first) sb.write(',');
+      first = false;
+      final lat = p['lat'];
+      final lng = p['lng'];
+      final weight = (p['weight'] as double).clamp(0.0, 1.0);
+      final label = p['label'] ?? '';
+      sb.write('{"type":"Feature","geometry":{"type":"Point","coordinates":[$lng,$lat]},'
+          '"properties":{"weight":$weight,"label":"$label"}}');
+    }
+    sb.write(']}');
+    await _updateSourceData(_congestionSourceId, sb.toString());
+  }
+
+  @override
+  void setCongestionVisible(bool visible) {
+    if (_mapboxMap == null || !_layersInitialized3D) return;
+    final v = visible ? 'visible' : 'none';
+    _mapboxMap!.style.setStyleLayerProperty(_congestionHeatmapLayerId, 'visibility', v);
+    _mapboxMap!.style.setStyleLayerProperty(_congestionCircleLayerId, 'visibility', v);
+    _mapboxMap!.style.setStyleLayerProperty(_congestionLabelLayerId, 'visibility', v);
+  }
+
+  @override
   void setUndergroundVisible(bool visible) {
     _undergroundVisible = visible;
     if (_mapboxMap != null && _layersInitialized3D) {
@@ -1069,6 +1203,11 @@ class _MapboxEngineState extends State<MapboxEngine> implements IMapController {
   @override
   void setOnMapTappedEmpty(VoidCallback? callback) {
     _onMapTappedEmpty = callback;
+  }
+
+  @override
+  void setOnAnyMapTap(VoidCallback? callback) {
+    _onAnyMapTap = callback;
   }
 
   @override
@@ -1120,12 +1259,23 @@ class _MapboxEngineState extends State<MapboxEngine> implements IMapController {
   void _onMapCreated(MapboxMap mapboxMap) {
     _mapboxMap = mapboxMap;
 
-    // 나침반을 우상단으로 이동
+    // 나침반: 우상단, 검색바 아래로 여유있게
     mapboxMap.compass.updateSettings(CompassSettings(
       position: OrnamentPosition.TOP_RIGHT,
-      marginTop: 100,
-      marginRight: 12,
+      marginTop: 120,
+      marginRight: 16,
     ));
+    // 로고: 좌하단, 어트리뷰션: 우하단 (탭바 위)
+    mapboxMap.logo.updateSettings(LogoSettings(
+      position: OrnamentPosition.BOTTOM_LEFT,
+      marginBottom: 90, marginLeft: 8,
+    ));
+    mapboxMap.attribution.updateSettings(AttributionSettings(
+      position: OrnamentPosition.BOTTOM_RIGHT,
+      marginBottom: 90, marginRight: 8,
+    ));
+    // 스케일바 숨김
+    mapboxMap.scaleBar.updateSettings(ScaleBarSettings(enabled: false));
 
     // 맵 탭 리스너 — 열차 클릭 감지
     mapboxMap.setOnMapTapListener((mapContentGestureContext) {
@@ -1149,6 +1299,7 @@ class _MapboxEngineState extends State<MapboxEngine> implements IMapController {
 
   /// 맵 탭 처리: 열차 레이어 hit test
   Future<void> _handleMapTap(MapContentGestureContext context) async {
+    _onAnyMapTap?.call();
     if (_mapboxMap == null || !_layersInitialized3D) return;
 
     final screenPoint = context.touchPosition;
@@ -1192,6 +1343,15 @@ class _MapboxEngineState extends State<MapboxEngine> implements IMapController {
         final feature = stationFeatures.first?.queriedFeature.feature;
         if (feature != null) {
           final props = feature['properties'];
+          // feature에서 좌표 추출 (지도 위 점과 동일 위치)
+          final geometry = feature['geometry'];
+          if (geometry is Map && geometry['coordinates'] is List) {
+            final coords = geometry['coordinates'] as List;
+            if (coords.length >= 2) {
+              _selectedStationLng = (coords[0] as num).toDouble();
+              _selectedStationLat = (coords[1] as num).toDouble();
+            }
+          }
           if (props is Map) {
             final name = props['name'];
             if (name != null && _onStationTapped != null) {
