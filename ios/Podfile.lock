@@ -1,19 +1,11 @@
 PODS:
+  - CocoaLumberjack (3.9.1):
+    - CocoaLumberjack/Core (= 3.9.1)
+  - CocoaLumberjack/Core (3.9.1)
+  - cupertino_native_better (0.0.1):
+    - Flutter
+    - SVGKit (~> 3.0)
   - Flutter (1.0.0)
-  - flutter_naver_map (1.4.2):
-    - Flutter
-    - NMapsMap (= 3.23.0)
-  - Google-Maps-iOS-Utils (5.0.0):
-    - GoogleMaps (~> 8.0)
-  - google_maps_flutter_ios (0.0.1):
-    - Flutter
-    - Google-Maps-iOS-Utils (< 7.0, >= 5.0)
-    - GoogleMaps (< 11.0, >= 8.4)
-  - GoogleMaps (8.4.0):
-    - GoogleMaps/Maps (= 8.4.0)
-  - GoogleMaps/Base (8.4.0)
-  - GoogleMaps/Maps (8.4.0):
-    - GoogleMaps/Base
   - mapbox_maps_flutter (2.21.0):
     - Flutter
     - MapboxMaps (= 11.21.0)
@@ -26,52 +18,50 @@ PODS:
     - MapboxCommon (= 24.21.0)
     - MapboxCoreMaps (= 11.21.0)
     - Turf (= 4.0.0)
-  - NMapsGeometry (1.0.2)
-  - NMapsMap (3.23.0):
-    - NMapsGeometry
+  - shared_preferences_foundation (0.0.1):
+    - Flutter
+    - FlutterMacOS
+  - SVGKit (3.0.0):
+    - CocoaLumberjack (~> 3.0)
   - Turf (4.0.0)
 
 DEPENDENCIES:
+  - cupertino_native_better (from `.symlinks/plugins/cupertino_native_better/ios`)
   - Flutter (from `Flutter`)
-  - flutter_naver_map (from `.symlinks/plugins/flutter_naver_map/ios`)
-  - google_maps_flutter_ios (from `.symlinks/plugins/google_maps_flutter_ios/ios`)
   - mapbox_maps_flutter (from `.symlinks/plugins/mapbox_maps_flutter/ios`)
+  - shared_preferences_foundation (from `.symlinks/plugins/shared_preferences_foundation/darwin`)
 
 SPEC REPOS:
   trunk:
-    - Google-Maps-iOS-Utils
-    - GoogleMaps
+    - CocoaLumberjack
     - MapboxCommon
     - MapboxCoreMaps
     - MapboxMaps
-    - NMapsGeometry
-    - NMapsMap
+    - SVGKit
     - Turf
 
 EXTERNAL SOURCES:
+  cupertino_native_better:
+    :path: ".symlinks/plugins/cupertino_native_better/ios"
   Flutter:
     :path: Flutter
-  flutter_naver_map:
-    :path: ".symlinks/plugins/flutter_naver_map/ios"
-  google_maps_flutter_ios:
-    :path: ".symlinks/plugins/google_maps_flutter_ios/ios"
   mapbox_maps_flutter:
     :path: ".symlinks/plugins/mapbox_maps_flutter/ios"
+  shared_preferences_foundation:
+    :path: ".symlinks/plugins/shared_preferences_foundation/darwin"
 
 SPEC CHECKSUMS:
+  CocoaLumberjack: e4ba3b414dfca8c1916c6303d37f63b3a95134c6
+  cupertino_native_better: 56964e07f30aa564188d4e3e2171ccb1c75f7a98
   Flutter: cabc95a1d2626b1b06e7179b784ebcf0c0cde467
-  flutter_naver_map: a1f6df83f663d9770e01624ba97a2d34c4fe349b
-  Google-Maps-iOS-Utils: 66d6de12be1ce6d3742a54661e7a79cb317a9321
-  google_maps_flutter_ios: 5f2ee3f5cc4fc2398574367f893e3f97bbbcea39
-  GoogleMaps: 8939898920281c649150e0af74aa291c60f2e77d
   mapbox_maps_flutter: c5240889dae28a05fee3774d4ebdcc64a47919f3
   MapboxCommon: c3ebc293d2e36be660f3ceb446d99e30d17c8399
   MapboxCoreMaps: 18739de744a107c2a9c4cd18b21a21d75066d6b0
   MapboxMaps: 6adfdfc495708b8bb06a463bc61421610d1bd2cd
-  NMapsGeometry: 4e02554fa9880ef02ed96b075dc84355d6352479
-  NMapsMap: 1964e6f9073301ad3cbe3a12235ba36f6f6cd905
+  shared_preferences_foundation: 5086985c1d43c5ba4d5e69a4e8083a389e2909e6
+  SVGKit: 1ad7513f8c74d9652f94ed64ddecda1a23864dea
   Turf: c9eb11a65d96af58cac523460fd40fec5061b081
 
-PODFILE CHECKSUM: 3792415449308f3df261ad2990f1c89a4999bbeb
+PODFILE CHECKSUM: 4a970a5ea521f2d0d0752853d35e5305a1cd2661
 
 COCOAPODS: 1.16.2
